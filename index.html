@@ -1,12 +1,644 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Workout Tracker</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Workout Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body class="bg-gray-100">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    const WorkoutTracker = () => {
+      const [users, setUsers] = useState(JSON.parse(localStorage.getItem('users') || '[]'));
+      const [currentUser, setCurrentUser] = useState(null);
+      const [workouts, setWorkouts] = useState([]);
+      const [friends, setFriends] = useState([]);
+      const [newWorkoutType, setNewWorkoutType] = useState('');
+      const [newFriend, setNewFriend] = useState('');
+      const [selectedFriend, setSelectedFriend] = useState(null);
+      const [loginData, setLoginData] = useState({ username: '', password: '' });
+      const [registerData, setRegisterData] = useState({ username: '', password: '' });
+      const [isRegistering, setIsRegistering] = useState(false);
+      const [workoutError, setWorkoutError] = useState('');
+      const [settingsError, setSettingsError] = useState('');
+      const [currentTab, setCurrentTab] = useState('workouts');
+      const [newPassword, setNewPassword] = useState('');
+      const [currentPassword, setCurrentPassword] = useState('');
+      const [newUsername, setNewUsername] = useState('');
+      const [selectedDate, setSelectedDate] = useState(null);
+      const [editWorkout, setEditWorkout] = useState(null);
+      const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
+      const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+      const [showAddPopup, setShowAddPopup] = useState(false);
+      const [showDeleteWorkoutPopup, setShowDeleteWorkoutPopup] = useState(null);
+      const [showDeleteFriendPopup, setShowDeleteFriendPopup] = useState(null);
+      const [suggestions, setSuggestions] = useState([]);
+      const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+      const [showPassword, setShowPassword] = useState(false);
+      const [selectedExercise, setSelectedExercise] = useState(null);
+      const chartRef = useRef(null);
+      const chartInstanceRef = useRef(null);
+
+      useEffect(() => {
+        localStorage.setItem('users', JSON.stringify(users));
+      }, [users]);
+
+      useEffect(() => {
+        setSettingsError('');
+      }, [currentTab]);
+
+      useEffect(() => {
+        if (showAddPopup && selectedDate) {
+          const uniqueTypes = getUniqueWorkoutTypes();
+          setSuggestions(uniqueTypes);
+        }
+      }, [showAddPopup, selectedDate]);
+
+      useEffect(() => {
+        if (showAddPopup && newWorkoutType && selectedDate) {
+          const filtered = getUniqueWorkoutTypes().filter(type =>
+            type.toLowerCase().includes(newWorkoutType.toLowerCase())
+          );
+          setSuggestions(filtered);
+        }
+      }, [newWorkoutType, showAddPopup, selectedDate]);
+
+      useEffect(() => {
+        if (currentTab === 'charts' && chartRef.current && workouts.length > 0) {
+          const workoutData = workouts.reduce((acc, w) => {
+            const date = w.date;
+            acc[date] = (acc[date] || 0) + 1;
+            return acc;
+          }, {});
+          const labels = Object.keys(workoutData).sort();
+          const data = labels.map(date => workoutData[date]);
+
+          if (chartInstanceRef.current) {
+            chartInstanceRef.current.destroy();
+          }
+
+          chartInstanceRef.current = new Chart(chartRef.current, {
+            type: 'bar',
+            data: {
+              labels,
+              datasets: [{
+                label: 'Number of Workouts',
+                data,
+                backgroundColor: 'rgba(59, 130, 246, 0.5)',
+                borderColor: 'rgba(59, 130, 246, 1)',
+                borderWidth: 1
+              }]
+            },
+            options: {
+              scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Workouts' } },
+                x: { title: { display: true, text: 'Date' } }
+              }
+            }
+          });
+        }
+        return () => {
+          if (chartInstanceRef.current) {
+            chartInstanceRef.current.destroy();
+            chartInstanceRef.current = null;
+          }
+        };
+      }, [currentTab, workouts]);
+
+      const handleRegister = () => {
+        if (registerData.username && registerData.password) {
+          if (users.some(u => u.username === registerData.username)) {
+            setSettingsError('Username already exists');
+            return;
+          }
+          setUsers([...users, { username: registerData.username, password: registerData.password, workouts: [], friends: [] }]);
+          setRegisterData({ username: '', password: '' });
+          setIsRegistering(false);
+          setSettingsError('');
+        } else {
+          setSettingsError('Please fill in all fields');
+        }
+      };
+
+      const handleLogin = () => {
+        const user = users.find(u => u.username === loginData.username && u.password === loginData.password);
+        if (user) {
+          setCurrentUser(user);
+          setWorkouts(user.workouts || []);
+          setFriends(user.friends || []);
+          setLoginData({ username: '', password: '' });
+          setSettingsError('');
+        } else {
+          setSettingsError('Invalid username or password');
+        }
+      };
+
+      const handleLogout = () => {
+        setCurrentUser(null);
+        setWorkouts([]);
+        setFriends([]);
+        setSelectedFriend(null);
+        setCurrentTab('workouts');
+        setSelectedDate(null);
+      };
+
+      const handleChangePassword = () => {
+        if (currentPassword && newPassword) {
+          if (currentUser.password === currentPassword) {
+            const updatedUser = { ...currentUser, password: newPassword };
+            setUsers(users.map(u => u.username === currentUser.username ? updatedUser : u));
+            setCurrentUser(updatedUser);
+            setCurrentPassword('');
+            setNewPassword('');
+            setSettingsError('Password updated successfully');
+          } else {
+            setSettingsError('Current password is incorrect');
+          }
+        } else {
+          setSettingsError('Please fill in all fields');
+        }
+      };
+
+      const handleChangeUsername = () => {
+        if (newUsername && !users.some(u => u.username === newUsername)) {
+          const updatedUser = { ...currentUser, username: newUsername };
+          setUsers(users.map(u => u.username === currentUser.username ? updatedUser : u));
+          setCurrentUser(updatedUser);
+          setNewUsername('');
+          setSettingsError('Username updated successfully');
+        } else {
+          setSettingsError('Username already exists or is empty');
+        }
+      };
+
+      const addWorkout = () => {
+        if (newWorkoutType && selectedDate) {
+          const existingWorkout = getWorkoutsForDate(selectedDate, workouts).find(w => w.type === newWorkoutType);
+          if (existingWorkout) {
+            setWorkoutError('This exercise already exists for the selected date!');
+            return;
+          }
+          const updatedWorkouts = [...workouts, { type: newWorkoutType, id: Date.now(), user: currentUser.username, date: selectedDate, sets: '0', reps: '0', weight: '0' }];
+          setWorkouts(updatedWorkouts);
+          updateUserData({ ...currentUser, workouts: updatedWorkouts });
+          setNewWorkoutType('');
+          setWorkoutError('');
+          setShowAddPopup(false);
+          setSuggestions([]);
+          setIsDropdownOpen(false);
+        } else {
+          setWorkoutError('Please enter a workout type');
+        }
+      };
+
+      const updateWorkout = () => {
+        if (editWorkout.type) {
+          const updatedWorkouts = workouts.map(w => w.id === editWorkout.id ? { ...editWorkout } : w);
+          setWorkouts(updatedWorkouts);
+          updateUserData({ ...currentUser, workouts: updatedWorkouts });
+          setEditWorkout(null);
+          setWorkoutError('');
+          setShowAddPopup(false);
+          setSuggestions([]);
+          setIsDropdownOpen(false);
+        } else {
+          setWorkoutError('Please enter a workout type');
+        }
+      };
+
+      const confirmDeleteWorkout = (id) => {
+        const updatedWorkouts = workouts.filter(w => w.id !== id);
+        setWorkouts(updatedWorkouts);
+        updateUserData({ ...currentUser, workouts: updatedWorkouts });
+        setShowDeleteWorkoutPopup(null);
+      };
+
+      const updateWorkoutMetrics = (id, metrics) => {
+        const updatedWorkouts = workouts.map(w => w.id === id ? { ...w, ...metrics } : w);
+        setWorkouts(updatedWorkouts);
+        updateUserData({ ...currentUser, workouts: updatedWorkouts });
+      };
+
+      const addFriend = () => {
+        if (newFriend && !friends.some(f => f.name === newFriend) && users.some(u => u.username === newFriend)) {
+          const updatedFriends = [...friends, { name: newFriend, workouts: users.find(u => u.username === newFriend).workouts || [], visible: true }];
+          setFriends(updatedFriends);
+          updateUserData({ ...currentUser, friends: updatedFriends });
+          setNewFriend('');
+          setSettingsError('');
+        } else {
+          setSettingsError('Friend not found or already added');
+        }
+      };
+
+      const removeFriend = (friendName) => {
+        const updatedFriends = friends.filter(f => f.name !== friendName);
+        setFriends(updatedFriends);
+        updateUserData({ ...currentUser, friends: updatedFriends });
+        if (selectedFriend && selectedFriend.name === friendName) {
+          setSelectedFriend(null);
+        }
+        setShowDeleteFriendPopup(null);
+      };
+
+      const toggleFriendVisibility = (friendName) => {
+        const updatedFriends = friends.map(f => f.name === friendName ? { ...f, visible: !f.visible } : f);
+        setFriends(updatedFriends);
+        updateUserData({ ...currentUser, friends: updatedFriends });
+      };
+
+      const updateUserData = (updatedUser) => {
+        setUsers(users.map(u => u.username === updatedUser.username ? updatedUser : u));
+      };
+
+      const getDaysInMonth = () => {
+        const days = new Date(currentYear, currentMonth + 1, 0).getDate();
+        const firstDay = new Date(currentYear, currentMonth, 1).getDay();
+        const offset = firstDay === 0 ? 6 : firstDay - 1;
+        const daysArray = Array.from({ length: days }, (_, i) => i + 1);
+        return { daysArray, offset };
+      };
+
+      const getWorkoutsForDate = (date, userWorkouts) => {
+        return userWorkouts.filter(w => w.date === date);
+      };
+
+      const getUniqueWorkoutTypes = () => {
+        return [...new Set(workouts.map(w => w.type))];
+      };
+
+      const changeMonth = (delta) => {
+        let newMonth = currentMonth + delta;
+        let newYear = currentYear;
+        if (newMonth < 0) { newMonth = 11; newYear -= 1; }
+        else if (newMonth > 11) { newMonth = 0; newYear += 1; }
+        setCurrentMonth(newMonth);
+        setCurrentYear(newYear);
+      };
+
+      const isToday = (day) => {
+        const today = new Date();
+        return day === today.getDate() && currentMonth === today.getMonth() && currentYear === today.getFullYear();
+      };
+
+      const monthNames = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+      if (!currentUser) {
+        return (
+          <div className="container mx-auto p-4 max-w-md">
+            <h1 className="text-3xl font-bold mb-6 text-center">Workout Tracker</h1>
+            <div className="p-4 bg-white rounded-lg shadow">
+              <h2 className="text-xl font-semibold mb-4">{isRegistering ? 'Register' : 'Login'}</h2>
+              {settingsError && <p className="text-red-500 mb-4">{settingsError}</p>}
+              <div className="space-y-4">
+                <input type="text" placeholder="Username" value={isRegistering ? registerData.username : loginData.username} onChange={(e) => isRegistering ? setRegisterData({ ...registerData, username: e.target.value }) : setLoginData({ ...loginData, username: e.target.value })} className="w-full p-2 border rounded" />
+                <input type="password" placeholder="Password" value={isRegistering ? registerData.password : loginData.password} onChange={(e) => isRegistering ? setRegisterData({ ...registerData, password: e.target.value }) : setLoginData({ ...loginData, password: e.target.value })} className="w-full p-2 border rounded" />
+                <button onClick={isRegistering ? handleRegister : handleLogin} className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600">{isRegistering ? 'Register' : 'Login'}</button>
+                <button onClick={() => { setIsRegistering(!isRegistering); setSettingsError(''); }} className="w-full p-2 bg-gray-300 text-black rounded hover:bg-gray-400">{isRegistering ? 'Switch to Login' : 'Switch to Register'}</button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="container mx-auto p-4 max-w-4xl">
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-3xl font-bold">Workout Tracker ({currentUser.username})</h1>
+          </div>
+
+          <div className="flex space-x-4 mb-6">
+            <button onClick={() => setCurrentTab('workouts')} className={`p-2 rounded ${currentTab === 'workouts' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>Workouts</button>
+            <button onClick={() => setCurrentTab('charts')} className={`p-2 rounded ${currentTab === 'charts' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>Charts</button>
+            <button onClick={() => setCurrentTab('settings')} className={`p-2 rounded ${currentTab === 'settings' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}>Settings</button>
+          </div>
+
+          {currentTab === 'workouts' && (
+            <div>
+              {selectedDate ? (
+                <div>
+                  <div className="flex justify-between items-center mb-4">
+                    <button onClick={() => setSelectedDate(null)} className="p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Back to Calendar</button>
+                    <button onClick={() => setShowAddPopup(true)} className="p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Add Workout</button>
+                  </div>
+                  <h2 className="text-xl font-semibold mb-4">Workouts for {selectedDate}</h2>
+                  {workoutError && <p className="text-red-500 mb-4">{workoutError}</p>}
+                  <div className="overflow-x-auto">
+                    <table className="w-full bg-white rounded-lg shadow table-fixed">
+                      <thead>
+                        <tr className="bg-gray-200">
+                          <th className="w-48 p-2 text-center">Exercises</th>
+                          <th className="flex-1 p-2 text-center">
+                            {currentUser.username}
+                            <div className="flex justify-center space-x-2 mt-1 text-sm text-gray-600">
+                              <span className="w-1/3 text-center">Sets</span>
+                              <span className="w-1/3 text-center">Reps</span>
+                              <span className="w-1/3 text-center">Weight</span>
+                            </div>
+                          </th>
+                          {friends.filter(f => f.visible).map(friend => (
+                            <th key={friend.name} className="flex-1 p-2 text-center">
+                              {friend.name}
+                              <div className="flex justify-center space-x-2 mt-1 text-sm text-gray-600">
+                                <span className="w-1/3 text-center">Sets</span>
+                                <span className="w-1/3 text-center">Reps</span>
+                                <span className="w-1/3 text-center">Weight</span>
+                              </div>
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {getWorkoutsForDate(selectedDate, workouts).map(workout => (
+                          <tr key={workout.id}>
+                            <td className="w-48 p-2 border-t text-center">
+                              <div className="flex justify-center items-center space-x-2">
+                                <span>{workout.type}</span>
+                                <div className="flex space-x-2">
+                                  <button onClick={() => { setEditWorkout(workout); setNewWorkoutType(workout.type); setShowAddPopup(true); }} className="p-1 text-yellow-500 hover:text-yellow-600">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z"></path></svg>
+                                  </button>
+                                  <button onClick={() => setShowDeleteWorkoutPopup(workout.id)} className="p-1 text-red-500 hover:text-red-600">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="flex-1 p-2 border-t text-center">
+                              <div className="flex justify-center space-x-2">
+                                <input type="number" placeholder="Sets" value={workout.sets || '0'} onChange={(e) => updateWorkoutMetrics(workout.id, { sets: e.target.value })} className="w-1/3 p-1 border rounded text-center" />
+                                <input type="number" placeholder="Reps" value={workout.reps || '0'} onChange={(e) => updateWorkoutMetrics(workout.id, { reps: e.target.value })} className="w-1/3 p-1 border rounded text-center" />
+                                <input type="number" placeholder="Weight" value={workout.weight || '0'} onChange={(e) => updateWorkoutMetrics(workout.id, { weight: e.target.value })} className="w-1/3 p-1 border rounded text-center" />
+                              </div>
+                            </td>
+                            {friends.filter(f => f.visible).map(friend => (
+                              <td key={friend.name} className="flex-1 p-2 border-t text-center">
+                                {getWorkoutsForDate(selectedDate, friend.workouts).filter(w => w.type === workout.type).map(w => (
+                                  <div key={w.id} className="flex justify-center space-x-2">
+                                    <input type="number" placeholder="Sets" value={w.sets || '0'} disabled className="w-1/3 p-1 border rounded bg-gray-100 text-center" />
+                                    <input type="number" placeholder="Reps" value={w.reps || '0'} disabled className="w-1/3 p-1 border rounded bg-gray-100 text-center" />
+                                    <input type="number" placeholder="Weight" value={w.weight || '0'} disabled className="w-1/3 p-1 border rounded bg-gray-100 text-center" />
+                                  </div>
+                                )) || (
+                                  <div className="flex justify-center space-x-2">
+                                    <input type="number" placeholder="Sets" value="0" disabled className="w-1/3 p-1 border rounded bg-gray-100 text-center" />
+                                    <input type="number" placeholder="Reps" value="0" disabled className="w-1/3 p-1 border rounded bg-gray-100 text-center" />
+                                    <input type="number" placeholder="Weight" value="0" disabled className="w-1/3 p-1 border rounded bg-gray-100 text-center" />
+                                  </div>
+                                )}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {showAddPopup && (
+                    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
+                      <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full">
+                        <h3 className="text-lg font-semibold mb-4">{editWorkout ? 'Edit Workout' : 'Add Workout'}</h3>
+                        <div className="space-y-4">
+                          <div className="relative">
+                            <input
+                              type="text"
+                              placeholder="Workout Type (e.g., Running)"
+                              value={newWorkoutType}
+                              onChange={(e) => setNewWorkoutType(e.target.value)}
+                              onFocus={() => setIsDropdownOpen(true)}
+                              onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
+                              className="w-full p-2 border rounded"
+                            />
+                            {isDropdownOpen && suggestions.length > 0 && (
+                              <div className="absolute z-10 w-full bg-white border rounded shadow-lg mt-1 max-h-40 overflow-y-auto">
+                                {suggestions.map((type, index) => (
+                                  <div
+                                    key={index}
+                                    onClick={() => { setNewWorkoutType(type); setIsDropdownOpen(false); }}
+                                    className="p-2 hover:bg-gray-100 cursor-pointer"
+                                  >
+                                    {type}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex space-x-2">
+                            <button onClick={editWorkout ? updateWorkout : addWorkout} disabled={!!getWorkoutsForDate(selectedDate, workouts).find(w => w.type === newWorkoutType) && !editWorkout} className="flex-1 p-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                              {editWorkout ? 'Update' : 'Add'}
+                            </button>
+                            <button onClick={() => { setShowAddPopup(false); setEditWorkout(null); setNewWorkoutType(''); setWorkoutError(''); setSuggestions([]); setIsDropdownOpen(false); }} className="flex-1 p-2 bg-gray-300 text-black rounded hover:bg-gray-400">
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                        {workoutError && <p className="text-red-500 mt-2">{workoutError}</p>}
+                      </div>
+                    </div>
+                  )}
+
+                  {showDeleteWorkoutPopup && (
+                    <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
+                      <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full">
+                        <h3 className="text-lg font-semibold mb-4">Confirm Deletion</h3>
+                        <p className="mb-4">Are you sure you want to delete this workout? This action is permanent.</p>
+                        <div className="flex space-x-2">
+                          <button onClick={() => confirmDeleteWorkout(showDeleteWorkoutPopup)} className="flex-1 p-2 bg-red-500 text-white rounded hover:bg-red-600">Confirm</button>
+                          <button onClick={() => setShowDeleteWorkoutPopup(null)} className="flex-1 p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Cancel</button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-4 bg-white rounded-lg shadow">
+                  <div className="flex justify-between items-center mb-4">
+                    <button onClick={() => changeMonth(-1)} className="p-2 bg-gray-300 rounded hover:bg-gray-400">Previous</button>
+                    <h2 className="text-xl font-semibold">{monthNames[currentMonth]} {currentYear}</h2>
+                    <button onClick={() => changeMonth(1)} className="p-2 bg-gray-300 rounded hover:bg-gray-400">Next</button>
+                  </div>
+                  <div className="grid grid-cols-7 gap-2">
+                    {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => <div key={day} className="text-center font-medium">{day}</div>)}
+                    {Array(getDaysInMonth().offset).fill(null).map((_, i) => <div key={`empty-${i}`} className="p-2"></div>)}
+                    {getDaysInMonth().daysArray.map(day => {
+                      const date = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                      const hasWorkouts = getWorkoutsForDate(date, workouts).length > 0;
+                      const today = isToday(day);
+                      return (
+                        <button key={day} onClick={() => setSelectedDate(date)} className={`p-2 rounded ${hasWorkouts ? 'bg-green-100' : 'bg-gray-50'} hover:bg-blue-200`}>
+                          {day}{today && <span className="ml-1">★</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {currentTab === 'charts' && (
+            <div className="p-4 bg-white rounded-lg shadow">
+              <h2 className="text-xl font-semibold mb-4">Your Workout Progress</h2>
+              {workouts.length > 0 ? <canvas ref={chartRef}></canvas> : <p className="text-gray-500">No workouts to display yet.</p>}
+            </div>
+          )}
+
+          {currentTab === 'settings' && (
+            <div className="p-4 bg-white rounded-lg shadow">
+              <h2 className="text-xl font-semibold mb-4">Settings</h2>
+              {settingsError && <p className="text-red-500 mb-4">{settingsError}</p>}
+              <div className="space-y-6">
+                {/* User Settings */}
+                <div>
+                  <h3 className="text-lg font-medium mb-2">User Settings</h3>
+                  <div className="space-y-4">
+                    <input type="text" placeholder="New Username" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="w-full p-2 border rounded" />
+                    <button onClick={handleChangeUsername} className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Update Name</button>
+                    <div className="relative">
+                      <input type={showPassword ? 'text' : 'password'} placeholder="Current Password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="w-full p-2 border rounded pr-10" />
+                      <button onClick={() => setShowPassword(!showPassword)} className="absolute right-2 top-2 p-1 text-gray-500 hover:text-gray-700">
+                        {showPassword ? (
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>
+                        ) : (
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                        )}
+                      </button>
+                    </div>
+                    <input type={showPassword ? 'text' : 'password'} placeholder="New Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full p-2 border rounded pr-10" />
+                    <button onClick={handleChangePassword} className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Update Password</button>
+                  </div>
+                </div>
+
+                {/* Friends Settings */}
+                <div>
+                  <h3 className="text-lg font-medium mb-2">Friends Settings</h3>
+                  <div className="space-y-4">
+                    <div className="flex space-x-2">
+                      <input type="text" placeholder="Friend's Username" value={newFriend} onChange={(e) => setNewFriend(e.target.value)} className="flex-1 p-2 border rounded" />
+                      <button onClick={addFriend} className="p-2 bg-green-500 text-white rounded hover:bg-green-600">Add</button>
+                    </div>
+                    <ul className="space-y-2">
+                      {friends.map(friend => (
+                        <li key={friend.name} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                          <span className="cursor-pointer hover:underline" onClick={() => setSelectedFriend(friend)}>{friend.name}</span>
+                          <div className="flex space-x-2">
+                            <button onClick={() => toggleFriendVisibility(friend.name)} className={`p-1 ${friend.visible ? 'text-gray-500 hover:text-gray-600' : 'text-gray-400 hover:text-gray-500'}`}>
+                              {friend.visible ? (
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                              ) : (
+                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>
+                              )}
+                            </button>
+                            <button onClick={() => setShowDeleteFriendPopup(friend.name)} className="p-1 text-red-500 hover:text-red-600">
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                    {selectedFriend && (
+                      <div className="mt-4">
+                        <h3 className="text-lg font-medium mb-2">{selectedFriend.name}'s Workouts</h3>
+                        <ul className="space-y-2">{selectedFriend.workouts.map(workout => <li key={workout.id} className="p-2 bg-gray-50 rounded">{workout.type} - {workout.date}</li>)}</ul>
+                        <button onClick={() => setSelectedFriend(null)} className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600">Close</button>
+                      </div>
+                    )}
+                    {showDeleteFriendPopup && (
+                      <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
+                        <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full">
+                          <h3 className="text-lg font-semibold mb-4">Confirm Removal</h3>
+                          <p className="mb-4">Are you sure you want to remove this friend?</p>
+                          <div className="flex space-x-2">
+                            <button onClick={() => removeFriend(showDeleteFriendPopup)} className="flex-1 p-2 bg-red-500 text-white rounded hover:bg-red-600">Confirm</button>
+                            <button onClick={() => setShowDeleteFriendPopup(null)} className="flex-1 p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Cancel</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Exercises */}
+                <div>
+                  <h3 className="text-lg font-medium mb-2">Exercises</h3>
+                  <ul className="space-y-2">
+                    {getUniqueWorkoutTypes().map(type => (
+                      <li key={type} className="p-2 bg-gray-50 rounded cursor-pointer hover:bg-gray-100" onClick={() => setSelectedExercise(type)}>
+                        {type}
+                      </li>
+                    ))}
+                  </ul>
+                  {selectedExercise && (
+                    <div className="mt-4 p-4 bg-gray-50 rounded-lg">
+                      <h4 className="text-md font-medium mb-2">{selectedExercise}</h4>
+                      <p className="mb-2">Description: A basic {selectedExercise.toLowerCase()} exercise targeting major muscle groups.</p>
+                      <svg className="w-16 h-16 text-blue-500 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                      </svg>
+                      <button onClick={() => setSelectedExercise(null)} className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600">Close</button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Logout */}
+                <div>
+                  <button onClick={handleLogout} className="w-full p-2 bg-red-500 text-white rounded hover:bg-red-600">Logout</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<WorkoutTracker />);
+  </script>
+</body>
 </html>
