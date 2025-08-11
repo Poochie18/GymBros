@@ -48,14 +48,29 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 </head>
 <body class="bg-gray-100">
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useEffect, useRef } = React;
 
+	const firebaseConfig = {
+	  apiKey: "AIzaSyBZRREDgLxgxYpNKtUHZkswej5ZrWx8h3g",
+	  authDomain: "workout-tracker-app-b6cd8.firebaseapp.com",
+	  projectId: "workout-tracker-app-b6cd8",
+	  storageBucket: "workout-tracker-app-b6cd8.firebasestorage.app",
+	  messagingSenderId: "331327932745",
+	  appId: "1:331327932745:web:c3a1e7b9973c5d5ee3f298",
+	  measurementId: "G-6E83DF6LHH"
+	};
+    const app = firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth(app);
+    const db = firebase.database(app);
+
     const WorkoutTracker = () => {
-      const [users, setUsers] = useState(JSON.parse(localStorage.getItem('users') || '[]'));
       const [currentUser, setCurrentUser] = useState(null);
       const [workouts, setWorkouts] = useState([]);
       const [friends, setFriends] = useState([]);
@@ -86,12 +101,23 @@
       const chartInstanceRef = useRef(null);
 
       useEffect(() => {
-        localStorage.setItem('users', JSON.stringify(users));
-      }, [users]);
-
-      useEffect(() => {
-        setSettingsError('');
-      }, [currentTab]);
+        const unsubscribe = auth.onAuthStateChanged(user => {
+          if (user) {
+            const userRef = db.ref('users/' + user.uid);
+            userRef.on('value', snapshot => {
+              const data = snapshot.val();
+              setCurrentUser(data);
+              setWorkouts(data.workouts || []);
+              setFriends(data.friends || []);
+            });
+          } else {
+            setCurrentUser(null);
+            setWorkouts([]);
+            setFriends([]);
+          }
+        });
+        return unsubscribe;
+      }, []);
 
       useEffect(() => {
         if (showAddPopup && selectedDate) {
@@ -151,65 +177,58 @@
         };
       }, [currentTab, workouts]);
 
-      const handleRegister = () => {
-        if (registerData.username && registerData.password) {
-          if (users.some(u => u.username === registerData.username)) {
-            setSettingsError('Username already exists');
-            return;
-          }
-          setUsers([...users, { username: registerData.username, password: registerData.password, workouts: [], friends: [] }]);
+      const handleRegister = async () => {
+        try {
+          const credential = await auth.createUserWithEmailAndPassword(registerData.username + '@fake.com', registerData.password);
+          const user = credential.user;
+          await db.ref('users/' + user.uid).set({
+            username: registerData.username,
+            workouts: [],
+            friends: []
+          });
           setRegisterData({ username: '', password: '' });
           setIsRegistering(false);
           setSettingsError('');
-        } else {
-          setSettingsError('Please fill in all fields');
+        } catch (error) {
+          setSettingsError(error.message);
         }
       };
 
-      const handleLogin = () => {
-        const user = users.find(u => u.username === loginData.username && u.password === loginData.password);
-        if (user) {
-          setCurrentUser(user);
-          setWorkouts(user.workouts || []);
-          setFriends(user.friends || []);
+      const handleLogin = async () => {
+        try {
+          await auth.signInWithEmailAndPassword(loginData.username + '@fake.com', loginData.password);
           setLoginData({ username: '', password: '' });
           setSettingsError('');
-        } else {
-          setSettingsError('Invalid username or password');
+        } catch (error) {
+          setSettingsError(error.message);
         }
       };
 
-      const handleLogout = () => {
-        setCurrentUser(null);
-        setWorkouts([]);
-        setFriends([]);
-        setSelectedFriend(null);
-        setCurrentTab('workouts');
-        setSelectedDate(null);
+      const handleLogout = async () => {
+        await auth.signOut();
       };
 
-      const handleChangePassword = () => {
+      const handleChangePassword = async () => {
         if (currentPassword && newPassword) {
-          if (currentUser.password === currentPassword) {
-            const updatedUser = { ...currentUser, password: newPassword };
-            setUsers(users.map(u => u.username === currentUser.username ? updatedUser : u));
-            setCurrentUser(updatedUser);
+          try {
+            await auth.signInWithEmailAndPassword(currentUser.username + '@fake.com', currentPassword);
+            await auth.currentUser.updatePassword(newPassword);
+            await db.ref('users/' + auth.currentUser.uid).update({ password: newPassword });
             setCurrentPassword('');
             setNewPassword('');
             setSettingsError('Password updated successfully');
-          } else {
-            setSettingsError('Current password is incorrect');
+          } catch (error) {
+            setSettingsError(error.message);
           }
         } else {
           setSettingsError('Please fill in all fields');
         }
       };
 
-      const handleChangeUsername = () => {
+      const handleChangeUsername = async () => {
         if (newUsername && !users.some(u => u.username === newUsername)) {
-          const updatedUser = { ...currentUser, username: newUsername };
-          setUsers(users.map(u => u.username === currentUser.username ? updatedUser : u));
-          setCurrentUser(updatedUser);
+          await db.ref('users/' + auth.currentUser.uid).update({ username: newUsername });
+          setCurrentUser({ ...currentUser, username: newUsername });
           setNewUsername('');
           setSettingsError('Username updated successfully');
         } else {
@@ -224,9 +243,10 @@
             setWorkoutError('This exercise already exists for the selected date!');
             return;
           }
-          const updatedWorkouts = [...workouts, { type: newWorkoutType, id: Date.now(), user: currentUser.username, date: selectedDate, sets: '0', reps: '0', weight: '0' }];
+          const newWorkout = { type: newWorkoutType, id: Date.now(), user: currentUser.username, date: selectedDate, sets: '0', reps: '0', weight: '0' };
+          const updatedWorkouts = [...workouts, newWorkout];
+          db.ref('users/' + auth.currentUser.uid + '/workouts').set(updatedWorkouts);
           setWorkouts(updatedWorkouts);
-          updateUserData({ ...currentUser, workouts: updatedWorkouts });
           setNewWorkoutType('');
           setWorkoutError('');
           setShowAddPopup(false);
@@ -240,8 +260,8 @@
       const updateWorkout = () => {
         if (editWorkout.type) {
           const updatedWorkouts = workouts.map(w => w.id === editWorkout.id ? { ...editWorkout } : w);
+          db.ref('users/' + auth.currentUser.uid + '/workouts').set(updatedWorkouts);
           setWorkouts(updatedWorkouts);
-          updateUserData({ ...currentUser, workouts: updatedWorkouts });
           setEditWorkout(null);
           setWorkoutError('');
           setShowAddPopup(false);
@@ -254,22 +274,22 @@
 
       const confirmDeleteWorkout = (id) => {
         const updatedWorkouts = workouts.filter(w => w.id !== id);
+        db.ref('users/' + auth.currentUser.uid + '/workouts').set(updatedWorkouts);
         setWorkouts(updatedWorkouts);
-        updateUserData({ ...currentUser, workouts: updatedWorkouts });
         setShowDeleteWorkoutPopup(null);
       };
 
       const updateWorkoutMetrics = (id, metrics) => {
         const updatedWorkouts = workouts.map(w => w.id === id ? { ...w, ...metrics } : w);
+        db.ref('users/' + auth.currentUser.uid + '/workouts').set(updatedWorkouts);
         setWorkouts(updatedWorkouts);
-        updateUserData({ ...currentUser, workouts: updatedWorkouts });
       };
 
       const addFriend = () => {
         if (newFriend && !friends.some(f => f.name === newFriend) && users.some(u => u.username === newFriend)) {
-          const updatedFriends = [...friends, { name: newFriend, workouts: users.find(u => u.username === newFriend).workouts || [], visible: true }];
+          const updatedFriends = [...friends, { name: newFriend, workouts: [], visible: true }];
+          db.ref('users/' + auth.currentUser.uid + '/friends').set(updatedFriends);
           setFriends(updatedFriends);
-          updateUserData({ ...currentUser, friends: updatedFriends });
           setNewFriend('');
           setSettingsError('');
         } else {
@@ -279,8 +299,8 @@
 
       const removeFriend = (friendName) => {
         const updatedFriends = friends.filter(f => f.name !== friendName);
+        db.ref('users/' + auth.currentUser.uid + '/friends').set(updatedFriends);
         setFriends(updatedFriends);
-        updateUserData({ ...currentUser, friends: updatedFriends });
         if (selectedFriend && selectedFriend.name === friendName) {
           setSelectedFriend(null);
         }
@@ -289,12 +309,8 @@
 
       const toggleFriendVisibility = (friendName) => {
         const updatedFriends = friends.map(f => f.name === friendName ? { ...f, visible: !f.visible } : f);
+        db.ref('users/' + auth.currentUser.uid + '/friends').set(updatedFriends);
         setFriends(updatedFriends);
-        updateUserData({ ...currentUser, friends: updatedFriends });
-      };
-
-      const updateUserData = (updatedUser) => {
-        setUsers(users.map(u => u.username === updatedUser.username ? updatedUser : u));
       };
 
       const getDaysInMonth = () => {
@@ -592,7 +608,7 @@
                     {showDeleteFriendPopup && (
                       <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
                         <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full">
-                          <h3 className="text-lg font-semibold mb-4">Confirm Removal</h3>
+                          <h3 className="text-lg font-medium mb-2">Confirm Removal</h3>
                           <p className="mb-4">Are you sure you want to remove this friend?</p>
                           <div className="flex space-x-2">
                             <button onClick={() => removeFriend(showDeleteFriendPopup)} className="flex-1 p-2 bg-red-500 text-white rounded hover:bg-red-600">Confirm</button>
@@ -618,7 +634,7 @@
                     <div className="mt-4 p-4 bg-gray-50 rounded-lg">
                       <h4 className="text-md font-medium mb-2">{selectedExercise}</h4>
                       <p className="mb-2">Description: A basic {selectedExercise.toLowerCase()} exercise targeting major muscle groups.</p>
-                      <svg className="w-16 h-16 text-blue-500 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <svg className="w-16 h-5 text-blue-500 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
                       </svg>
                       <button onClick={() => setSelectedExercise(null)} className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600">Close</button>
