@@ -488,12 +488,6 @@
             return;
           }
 
-          // Check if request already sent
-          const existingRequestSent = await db.ref(`users/${friendUid}/friendRequests/${currentUser.uid}`).once('value');
-          if (existingRequestSent.exists()) {
-            setSettingsError('Friend request already sent to this user.');
-            return;
-          }
 
           // Check if request already received
           const existingRequestReceived = await db.ref(`users/${currentUser.uid}/friendRequests/${friendUid}`).once('value');
