@@ -114,7 +114,7 @@
                     const userCredential = await auth.createUserWithEmailAndPassword(email, data.password);
                     const user = userCredential.user;
                     
-                    await db.ref(`users/${user.uid}/profile`).set({ username: data.username.trim(), email: email });
+                    await db.ref(`users/${user.uid}/profile`).set({ username: data.username.trim(), email: email, firstName: '', lastName: '', dateOfBirth: '' });
                     await db.ref(`usernames/${username}`).set({ uid: user.uid });
 
                 } catch (err) {
@@ -169,7 +169,12 @@
                 if (user) {
                     const userProfileSnapshot = await db.ref(`users/${user.uid}/profile`).once('value');
                     const userProfile = userProfileSnapshot.val();
-                    setCurrentUser({ ...user, username: userProfile?.username || user.email.split('@')[0] });
+                    // Set the actual user object and then augment it with profile data
+                    user.username = userProfile?.username || user.email.split('@')[0];
+                    user.firstName = userProfile?.firstName || '';
+                    user.lastName = userProfile?.lastName || '';
+                    user.dateOfBirth = userProfile?.dateOfBirth || '';
+                    setCurrentUser(user);
                 } else {
                     setCurrentUser(null);
                 }
@@ -200,7 +205,11 @@
       const [currentTab, setCurrentTab] = useState('workouts');
       const [newPassword, setNewPassword] = useState('');
       const [currentPassword, setCurrentPassword] = useState('');
-      const [newUsername, setNewUsername] = useState('');
+      const [firstName, setFirstName] = useState('');
+      const [lastName, setLastName] = useState('');
+      const [dateOfBirth, setDateOfBirth] = useState('');
+      const [showNewPassword, setShowNewPassword] = useState(false); // New state for new password visibility
+      const [friendRequests, setFriendRequests] = useState([]); // New state for friend requests
       const [selectedDate, setSelectedDate] = useState(null);
       const [editWorkout, setEditWorkout] = useState(null);
       const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
@@ -210,13 +219,24 @@
       const [showDeleteFriendPopup, setShowDeleteFriendPopup] = useState(null);
       const [suggestions, setSuggestions] = useState([]);
       const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-      const [showPassword, setShowPassword] = useState(false);
+      const [showPassword, setShowPassword] = useState(false); // For current password visibility
       const [selectedExercise, setSelectedExercise] = useState(null);
       const chartRef = useRef(null);
       const chartInstanceRef = useRef(null);
 
       useEffect(() => {
         if (currentUser) {
+          // Load user profile data
+          const userProfileRef = db.ref(`users/${currentUser.uid}/profile`);
+          userProfileRef.on('value', (snapshot) => {
+            const profileData = snapshot.val();
+            if (profileData) {
+              setFirstName(profileData.firstName || '');
+              setLastName(profileData.lastName || '');
+              setDateOfBirth(profileData.dateOfBirth || '');
+            }
+          });
+
           const userWorkoutsRef = db.ref(`users/${currentUser.uid}/workouts`);
           userWorkoutsRef.on('value', (snapshot) => {
             const workoutsData = snapshot.val();
@@ -225,15 +245,52 @@
           });
 
           const userFriendsRef = db.ref(`users/${currentUser.uid}/friends`);
-          userFriendsRef.on('value', (snapshot) => {
+          userFriendsRef.on('value', async (snapshot) => {
             const friendsData = snapshot.val();
-            const loadedFriends = friendsData ? Object.keys(friendsData).map(key => ({ name: key, ...friendsData[key] })) : [];
+            const loadedFriends = [];
+            if (friendsData) {
+              for (const friendUsername in friendsData) {
+                const friendUid = friendsData[friendUsername].uid;
+                const friendProfileSnapshot = await db.ref(`users/${friendUid}/profile`).once('value');
+                const friendProfile = friendProfileSnapshot.val();
+                loadedFriends.push({
+                  name: friendUsername,
+                  uid: friendUid,
+                  visible: friendsData[friendUsername].visible,
+                  workouts: [], // Will be loaded separately if needed
+                  firstName: friendProfile?.firstName || '',
+                  lastName: friendProfile?.lastName || ''
+                });
+              }
+            }
             setFriends(loadedFriends);
           });
 
+          const friendRequestsRef = db.ref(`users/${currentUser.uid}/friendRequests`);
+          friendRequestsRef.on('value', async (snapshot) => {
+            const requestsData = snapshot.val();
+            const loadedRequests = [];
+            if (requestsData) {
+              for (const senderUid in requestsData) {
+                const senderProfileSnapshot = await db.ref(`users/${senderUid}/profile`).once('value');
+                const senderProfile = senderProfileSnapshot.val();
+                loadedRequests.push({
+                  uid: senderUid,
+                  username: senderProfile?.username || 'Unknown',
+                  firstName: senderProfile?.firstName || '',
+                  lastName: senderProfile?.lastName || ''
+                });
+              }
+            }
+            setFriendRequests(loadedRequests);
+          });
+
+
           return () => {
+            userProfileRef.off();
             userWorkoutsRef.off();
             userFriendsRef.off();
+            friendRequestsRef.off();
           };
         }
       }, [currentUser]);
@@ -330,39 +387,16 @@
         }
       };
 
-      const handleChangeUsername = async () => {
-        if (newUsername && newUsername.trim() !== '') {
-          const newUsernameLower = newUsername.toLowerCase().trim();
-          if (newUsernameLower === currentUser.username.toLowerCase()) {
-            setSettingsError('New username is the same as current username.');
-            return;
-          }
-          try {
-            const usernameSnapshot = await db.ref(`usernames/${newUsernameLower}`).once('value');
-            if (usernameSnapshot.exists()) {
-              setSettingsError('Username already exists. Please choose another one.');
-              return;
-            }
-
-            // Update username in Firebase Auth (email)
-            const newEmail = `${newUsernameLower}@g.com`;
-            await currentUser.updateEmail(newEmail);
-
-            // Update username in Realtime Database
-            await db.ref(`users/${currentUser.uid}/profile/username`).set(newUsername.trim());
-            await db.ref(`users/${currentUser.uid}/profile/email`).set(newEmail);
-
-            // Remove old username mapping and add new one
-            await db.ref(`usernames/${currentUser.username.toLowerCase()}`).remove();
-            await db.ref(`usernames/${newUsernameLower}`).set({ uid: currentUser.uid });
-
-            setNewUsername('');
-            setSettingsError('Username updated successfully');
-          } catch (error) {
-            setSettingsError(error.message);
-          }
-        } else {
-          setSettingsError('New username cannot be empty.');
+      const handleUpdateProfile = async () => {
+        try {
+          await db.ref(`users/${currentUser.uid}/profile`).update({
+            firstName: firstName,
+            lastName: lastName,
+            dateOfBirth: dateOfBirth
+          });
+          setSettingsError('Profile updated successfully');
+        } catch (error) {
+          setSettingsError(error.message);
         }
       };
 
@@ -415,41 +449,100 @@
         await db.ref(`users/${currentUser.uid}/workouts/${id}`).update(metrics);
       };
 
-      const addFriend = async () => {
+      const sendFriendRequest = async () => {
         if (newFriend && newFriend.trim() !== '') {
           const friendUsernameLower = newFriend.toLowerCase().trim();
           if (friendUsernameLower === currentUser.username.toLowerCase()) {
-            setSettingsError('You cannot add yourself as a friend.');
+            setSettingsError('You cannot send a friend request to yourself.');
             return;
           }
 
           const friendUidSnapshot = await db.ref(`usernames/${friendUsernameLower}`).once('value');
           if (!friendUidSnapshot.exists()) {
-            setSettingsError('Friend not found.');
+            setSettingsError('User not found.');
             return;
           }
           const friendUid = friendUidSnapshot.val().uid;
 
-          const existingFriendSnapshot = await db.ref(`users/${currentUser.uid}/friends/${friendUsernameLower}`).once('value');
-          if (existingFriendSnapshot.exists()) {
-            setSettingsError('Friend already added.');
+          // Check if already friends
+          const existingFriendship = await db.ref(`users/${currentUser.uid}/friends/${friendUsernameLower}`).once('value');
+          if (existingFriendship.exists()) {
+            setSettingsError('You are already friends with this user.');
             return;
           }
 
-          await db.ref(`users/${currentUser.uid}/friends/${friendUsernameLower}`).set({ uid: friendUid, visible: true });
+          // Check if request already sent
+          const existingRequestSent = await db.ref(`users/${friendUid}/friendRequests/${currentUser.uid}`).once('value');
+          if (existingRequestSent.exists()) {
+            setSettingsError('Friend request already sent to this user.');
+            return;
+          }
+
+          // Check if request already received
+          const existingRequestReceived = await db.ref(`users/${currentUser.uid}/friendRequests/${friendUid}`).once('value');
+          if (existingRequestReceived.exists()) {
+            setSettingsError('This user has already sent you a friend request. Please accept it in the requests section.');
+            return;
+          }
+
+          // Send request
+          await db.ref(`users/${friendUid}/friendRequests/${currentUser.uid}`).set({
+            username: currentUser.username,
+            firstName: currentUser.firstName,
+            lastName: currentUser.lastName
+          });
           setNewFriend('');
-          setSettingsError('');
+          setSettingsError('Friend request sent!');
         } else {
           setSettingsError('Please enter a friend\'s username.');
         }
       };
 
-      const removeFriend = async (friendName) => {
-        await db.ref(`users/${currentUser.uid}/friends/${friendName.toLowerCase()}`).remove();
-        if (selectedFriend && selectedFriend.name === friendName) {
-          setSelectedFriend(null);
+      const acceptFriendRequest = async (requesterUid, requesterUsername) => {
+        try {
+          // Add to current user's friends
+          await db.ref(`users/${currentUser.uid}/friends/${requesterUsername.toLowerCase()}`).set({ uid: requesterUid, visible: true });
+          // Add current user to requester's friends
+          await db.ref(`users/${requesterUid}/friends/${currentUser.username.toLowerCase()}`).set({ uid: currentUser.uid, visible: true });
+          // Remove request
+          await db.ref(`users/${currentUser.uid}/friendRequests/${requesterUid}`).remove();
+          setSettingsError('Friend request accepted!');
+        } catch (error) {
+          setSettingsError(error.message);
         }
-        setShowDeleteFriendPopup(null);
+      };
+
+      const declineFriendRequest = async (requesterUid) => {
+        try {
+          await db.ref(`users/${currentUser.uid}/friendRequests/${requesterUid}`).remove();
+          setSettingsError('Friend request declined.');
+        } catch (error) {
+          setSettingsError(error.message);
+        }
+      };
+
+      const removeFriend = async (friendName) => {
+        try {
+          const friendDataSnapshot = await db.ref(`users/${currentUser.uid}/friends/${friendName.toLowerCase()}`).once('value');
+          const friendUid = friendDataSnapshot.val()?.uid;
+
+          if (friendUid) {
+            // Remove from current user's friends
+            await db.ref(`users/${currentUser.uid}/friends/${friendName.toLowerCase()}`).remove();
+            // Remove current user from friend's friends
+            await db.ref(`users/${friendUid}/friends/${currentUser.username.toLowerCase()}`).remove();
+            setSettingsError('Friend removed successfully.');
+          } else {
+            setSettingsError('Friend not found in your list.');
+          }
+
+          if (selectedFriend && selectedFriend.name === friendName) {
+            setSelectedFriend(null);
+          }
+          setShowDeleteFriendPopup(null);
+        } catch (error) {
+          setSettingsError(error.message);
+        }
       };
 
       const toggleFriendVisibility = async (friendName) => {
@@ -494,7 +587,7 @@
       return (
         <div className="container mx-auto p-4 max-w-4xl">
           <div className="flex justify-between items-center mb-6">
-            <h1 className="text-3xl font-bold">Workout Tracker ({currentUser.username})</h1>
+            <h1 className="text-3xl font-bold">Workout Tracker</h1>
           </div>
 
           <div className="flex space-x-4 mb-6">
@@ -528,7 +621,7 @@
                           </th>
                           {friends.filter(f => f.visible).map(friend => (
                             <th key={friend.name} className="flex-1 p-2 text-center">
-                              {friend.name}
+                              {friend.firstName} {friend.lastName} ({friend.name})
                               <div className="flex justify-center space-x-2 mt-1 text-sm text-gray-600">
                                 <span className="w-1/3 text-center">Sets</span>
                                 <span className="w-1/3 text-center">Reps</span>
@@ -678,12 +771,21 @@
               <h2 className="text-xl font-semibold mb-4">Settings</h2>
               {settingsError && <p className="text-red-500 mb-4">{settingsError}</p>}
               <div className="space-y-6">
-                {/* User Settings */}
+                {/* Profile Settings */}
                 <div>
-                  <h3 className="text-lg font-medium mb-2">User Settings</h3>
+                  <h3 className="text-lg font-medium mb-2">Profile Settings</h3>
                   <div className="space-y-4">
-                    <input type="text" placeholder="New Username" value={newUsername} onChange={(e) => setNewUsername(e.target.value)} className="w-full p-2 border rounded" />
-                    <button onClick={handleChangeUsername} className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Update Name</button>
+                    <input type="text" placeholder="First Name" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full p-2 border rounded" />
+                    <input type="text" placeholder="Last Name" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full p-2 border rounded" />
+                    <input type="date" placeholder="Date of Birth" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} className="w-full p-2 border rounded" />
+                    <button onClick={handleUpdateProfile} className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Update Profile</button>
+                  </div>
+                </div>
+
+                {/* Password Settings */}
+                <div>
+                  <h3 className="text-lg font-medium mb-2">Password Settings</h3>
+                  <div className="space-y-4">
                     <div className="relative">
                       <input type={showPassword ? 'text' : 'password'} placeholder="Current Password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="w-full p-2 border rounded pr-10" />
                       <button onClick={() => setShowPassword(!showPassword)} className="absolute right-2 top-2 p-1 text-gray-500 hover:text-gray-700">
@@ -694,9 +796,38 @@
                         )}
                       </button>
                     </div>
-                    <input type={showPassword ? 'text' : 'password'} placeholder="New Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full p-2 border rounded pr-10" />
+                    <div className="relative">
+                      <input type={showNewPassword ? 'text' : 'password'} placeholder="New Password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} className="w-full p-2 border rounded pr-10" />
+                      <button onClick={() => setShowNewPassword(!showNewPassword)} className="absolute right-2 top-2 p-1 text-gray-500 hover:text-gray-700">
+                        {showNewPassword ? (
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path></svg>
+                        ) : (
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+                        )}
+                      </button>
+                    </div>
                     <button onClick={handleChangePassword} className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Update Password</button>
                   </div>
+                </div>
+
+                {/* Friend Requests */}
+                <div>
+                  <h3 className="text-lg font-medium mb-2">Friend Requests ({friendRequests.length})</h3>
+                  {friendRequests.length > 0 ? (
+                    <ul className="space-y-2">
+                      {friendRequests.map(request => (
+                        <li key={request.uid} className="flex justify-between items-center p-2 bg-gray-50 rounded">
+                          <span>{request.firstName} {request.lastName} ({request.username})</span>
+                          <div className="flex space-x-2">
+                            <button onClick={() => acceptFriendRequest(request.uid, request.username)} className="p-1 text-green-500 hover:text-green-600">Accept</button>
+                            <button onClick={() => declineFriendRequest(request.uid)} className="p-1 text-red-500 hover:text-red-600">Decline</button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-gray-500">No pending friend requests.</p>
+                  )}
                 </div>
 
                 {/* Friends Settings */}
@@ -705,12 +836,12 @@
                   <div className="space-y-4">
                     <div className="flex space-x-2">
                       <input type="text" placeholder="Friend's Username" value={newFriend} onChange={(e) => setNewFriend(e.target.value)} className="flex-1 p-2 border rounded" />
-                      <button onClick={addFriend} className="p-2 bg-green-500 text-white rounded hover:bg-green-600">Add</button>
+                      <button onClick={sendFriendRequest} className="p-2 bg-green-500 text-white rounded hover:bg-green-600">Send Request</button>
                     </div>
                     <ul className="space-y-2">
                       {friends.map(friend => (
                         <li key={friend.name} className="flex justify-between items-center p-2 bg-gray-50 rounded">
-                          <span className="cursor-pointer hover:underline" onClick={() => setSelectedFriend(friend)}>{friend.name}</span>
+                          <span className="cursor-pointer hover:underline" onClick={() => setSelectedFriend(friend)}>{friend.firstName} {friend.lastName} ({friend.name})</span>
                           <div className="flex space-x-2">
                             <button onClick={() => toggleFriendVisibility(friend.name)} className={`p-1 ${friend.visible ? 'text-gray-500 hover:text-gray-600' : 'text-gray-400 hover:text-gray-500'}`}>
                               {friend.visible ? (
@@ -728,7 +859,7 @@
                     </ul>
                     {selectedFriend && (
                       <div className="mt-4">
-                        <h3 className="text-lg font-medium mb-2">{selectedFriend.name}'s Workouts</h3>
+                        <h3 className="text-lg font-medium mb-2">{selectedFriend.firstName} {selectedFriend.lastName} ({selectedFriend.name})'s Workouts</h3>
                         <ul className="space-y-2">{selectedFriend.workouts.map(workout => <li key={workout.id} className="p-2 bg-gray-50 rounded">{workout.type} - {workout.date}</li>)}</ul>
                         <button onClick={() => setSelectedFriend(null)} className="mt-4 p-2 bg-red-500 text-white rounded hover:bg-red-600">Close</button>
                       </div>
