@@ -170,7 +170,7 @@
                     const userProfileSnapshot = await db.ref(`users/${user.uid}/profile`).once('value');
                     const userProfile = userProfileSnapshot.val();
                     // Set the actual user object and then augment it with profile data
-                    user.username = userProfile?.username || user.email.split('@')[0];
+                    user.username = (userProfile?.username || user.email.split('@')[0]).toLowerCase();
                     user.firstName = userProfile?.firstName || '';
                     user.lastName = userProfile?.lastName || '';
                     user.dateOfBirth = userProfile?.dateOfBirth || '';
