@@ -270,18 +270,17 @@
           });
 
           const friendRequestsRef = db.ref(`users/${currentUser.uid}/friendRequests`);
-          friendRequestsRef.on('value', async (snapshot) => {
+          friendRequestsRef.on('value', (snapshot) => {
             const requestsData = snapshot.val();
             const loadedRequests = [];
             if (requestsData) {
               for (const senderUid in requestsData) {
-                const senderProfileSnapshot = await db.ref(`users/${senderUid}/profile`).once('value');
-                const senderProfile = senderProfileSnapshot.val();
+                // Use the data directly from the friend request node, as it contains the necessary sender info
                 loadedRequests.push({
                   uid: senderUid,
-                  username: senderProfile?.username || 'Unknown',
-                  firstName: senderProfile?.firstName || '',
-                  lastName: senderProfile?.lastName || ''
+                  username: requestsData[senderUid].username || 'Unknown',
+                  firstName: requestsData[senderUid].firstName || '',
+                  lastName: requestsData[senderUid].lastName || ''
                 });
               }
             }
@@ -779,6 +778,7 @@
                 {/* Profile Settings */}
                 <div>
                   <h3 className="text-lg font-medium mb-2">Profile Settings</h3>
+                  <p className="text-gray-600 mb-4">Username: {currentUser.username}</p>
                   <div className="space-y-4">
                     <input type="text" placeholder="First Name" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full p-2 border rounded" />
                     <input type="text" placeholder="Last Name" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full p-2 border rounded" />
