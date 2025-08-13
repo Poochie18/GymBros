@@ -114,7 +114,7 @@
                     const userCredential = await auth.createUserWithEmailAndPassword(email, data.password);
                     const user = userCredential.user;
                     
-                    await db.ref(`users/${user.uid}/profile`).set({ username: data.username.trim(), email: email, firstName: '', lastName: '', dateOfBirth: '' });
+                    await db.ref(`users/${user.uid}/profile`).set({ username: username, email: email, firstName: '', lastName: '', dateOfBirth: '' });
                     await db.ref(`usernames/${username}`).set({ uid: user.uid });
 
                 } catch (err) {
