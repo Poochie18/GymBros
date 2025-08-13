@@ -258,10 +258,10 @@
                 const friendProfileSnapshot = await db.ref(`users/${friendUid}/profile`).once('value');
                 const friendProfile = friendProfileSnapshot.val();
                 loadedFriends.push({
-                  name: friendInfo.username, // Use username from stored data
+                  name: friendInfo.username || friendProfile?.username || 'Unknown', // Fallback for username
                   uid: friendUid,
                   visible: friendInfo.visible,
-                  workouts: [], // Will be loaded separately if needed
+                  workouts: [],
                   firstName: friendProfile?.firstName || '',
                   lastName: friendProfile?.lastName || ''
                 });
