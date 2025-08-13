@@ -511,12 +511,16 @@
 
       const acceptFriendRequest = async (requesterUid, requesterUsername) => {
         try {
+          const updates = {};
           // Add to current user's friends
-          await db.ref(`users/${currentUser.uid}/friends/${requesterUsername.toLowerCase()}`).set({ uid: requesterUid, visible: true });
+          updates[`users/${currentUser.uid}/friends/${requesterUsername.toLowerCase()}`] = { uid: requesterUid, visible: true };
           // Add current user to requester's friends
-          await db.ref(`users/${requesterUid}/friends/${currentUser.username.toLowerCase()}`).set({ uid: currentUser.uid, visible: true });
+          updates[`users/${requesterUid}/friends/${currentUser.username.toLowerCase()}`] = { uid: currentUser.uid, visible: true };
           // Remove request
-          await db.ref(`users/${currentUser.uid}/friendRequests/${requesterUid}`).remove();
+          updates[`users/${currentUser.uid}/friendRequests/${requesterUid}`] = null; // Use null to remove
+
+          await db.ref().update(updates); // Perform atomic multi-path update
+
           setSettingsError('Friend request accepted!');
           // Update friend requests state to reflect the change immediately
           setFriendRequests(prevRequests => prevRequests.filter(req => req.uid !== requesterUid));
@@ -529,6 +533,8 @@
         try {
           await db.ref(`users/${currentUser.uid}/friendRequests/${requesterUid}`).remove();
           setSettingsError('Friend request declined.');
+          // Update friend requests state to reflect the change immediately
+          setFriendRequests(prevRequests => prevRequests.filter(req => req.uid !== requesterUid));
         } catch (error) {
           setSettingsError(error.message);
         }
