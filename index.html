@@ -255,8 +255,11 @@
               // Iterate over UIDs (keys) instead of usernames
               for (const friendUid in friendsData) {
                 const friendInfo = friendsData[friendUid]; // This will be { username, visible }
+                console.log(`Processing friendUid: ${friendUid}`);
+                console.log('friendInfo:', friendInfo);
                 const friendProfileSnapshot = await db.ref(`users/${friendUid}/profile`).once('value');
                 const friendProfile = friendProfileSnapshot.val();
+                console.log('friendProfile:', friendProfile);
                 loadedFriends.push({
                   name: friendInfo.username || friendProfile?.username || 'Unknown', // Fallback for username
                   uid: friendUid,
