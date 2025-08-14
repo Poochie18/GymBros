@@ -20,6 +20,9 @@ self.addEventListener('install', (event) => {
         console.log('Opened cache');
         return cache.addAll(urlsToCache);
       })
+      .catch(error => {
+        console.error('Failed to open cache or add URLs:', error);
+      })
   );
 });
 
@@ -34,7 +37,7 @@ self.addEventListener('activate', (event) => {
           }
         })
       );
-    })
+    }).then(() => self.clients.claim()) // Claim clients immediately
   );
 });
 
@@ -66,7 +69,63 @@ self.addEventListener('fetch', (event) => {
 
             return response;
           }
-        );
+        ).catch(error => {
+          // If fetch fails, try to serve from cache or return a fallback
+          console.error('Fetch failed:', error);
+          return caches.match('/index.html'); // Fallback to offline page
+        });
       })
     );
 });
+
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-offline-workouts') {
+    event.waitUntil(syncOfflineWorkouts());
+  }
+});
+
+async function syncOfflineWorkouts() {
+  const firebaseConfig = {
+    apiKey: "AIzaSyBZRREDgLxgxYpNKtUHZkswej5ZrWx8h3g",
+    authDomain: "workout-tracker-app-b6cd8.firebaseapp.com",
+    databaseURL: "https://workout-tracker-app-b6cd8-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "workout-tracker-app-b6cd8",
+    storageBucket: "workout-tracker-app-b6cd8.appspot.com",
+    messagingSenderId: "331327932745",
+    appId: "1:331327932745:web:c3a1e7b9973c5d5ee3f298",
+    measurementId: "G-6E83DF6LHH"
+  };
+
+  if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+  }
+  const db = firebase.database();
+
+  const offlineWorkouts = JSON.parse(localStorage.getItem('offlineWorkouts')) || [];
+  const updatedOfflineWorkouts = [];
+
+  for (const workout of offlineWorkouts) {
+    try {
+      if (workout.status === 'pending') {
+        const userWorkoutsRef = db.ref(`users/${workout.userUid}/workouts`);
+        if (workout.action === 'add') {
+          // For new workouts, push to generate a new ID
+          const newRef = userWorkoutsRef.push();
+          await newRef.set({ ...workout.data, id: newRef.key });
+          console.log('Synced new workout:', workout.data);
+        } else if (workout.action === 'update') {
+          await userWorkoutsRef.child(workout.id).set(workout.data);
+          console.log('Synced updated workout:', workout.data);
+        } else if (workout.action === 'delete') {
+          await userWorkoutsRef.child(workout.id).remove();
+          console.log('Synced deleted workout:', workout.id);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to sync workout:', workout, error);
+      updatedOfflineWorkouts.push(workout); // Keep failed workouts for retry
+    }
+  }
+
+  localStorage.setItem('offlineWorkouts', JSON.stringify(updatedOfflineWorkouts));
+}

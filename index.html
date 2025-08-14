@@ -127,7 +127,7 @@
                     const userCredential = await auth.createUserWithEmailAndPassword(email, data.password);
                     const user = userCredential.user;
                     
-                    await db.ref(`users/${user.uid}/profile`).set({ username: username, email: email, firstName: '', lastName: '', dateOfBirth: '' });
+                    await db.ref(`users/${user.uid}/profile`).set({ username: username, email: email, firstName: '', lastName: '', dateOfBirth: '', shareWorkouts: true }); // Added shareWorkouts
                     await db.ref(`usernames/${username}`).set({ uid: user.uid });
 
                 } catch (err) {
@@ -187,14 +187,30 @@
                     user.firstName = userProfile?.firstName || '';
                     user.lastName = userProfile?.lastName || '';
                     user.dateOfBirth = userProfile?.dateOfBirth || '';
+                    user.shareWorkouts = userProfile?.shareWorkouts ?? true; // Added shareWorkouts, default to true
                     setCurrentUser(user);
                 } else {
                     setCurrentUser(null);
                 }
                 setLoading(false);
             });
+
+            // Register sync event for offline data when online
+            if ('serviceWorker' in navigator && 'SyncManager' in window) {
+              window.addEventListener('online', async () => {
+                console.log('App is online, attempting to sync offline workouts...');
+                try {
+                  const registration = await navigator.serviceWorker.ready;
+                  await registration.sync.register('sync-offline-workouts');
+                  console.log('Sync event registered.');
+                } catch (error) {
+                  console.error('Failed to register sync event:', error);
+                }
+              });
+            }
+
             return () => unsubscribe();
-        }, []);
+          }, []);
 
         if (loading) {
             return <div className="flex justify-center items-center h-screen text-xl">Loading...</div>;
@@ -225,6 +241,7 @@
       const [firstName, setFirstName] = useState('');
       const [lastName, setLastName] = useState('');
       const [dateOfBirth, setDateOfBirth] = useState('');
+      const [shareWorkouts, setShareWorkouts] = useState(currentUser.shareWorkouts); // New state for workout sharing
       const [showNewPassword, setShowNewPassword] = useState(false);
       const [friendRequests, setFriendRequests] = useState([]);
       const [selectedDate, setSelectedDate] = useState(null);
@@ -258,6 +275,7 @@
               setFirstName(profileData.firstName || '');
               setLastName(profileData.lastName || '');
               setDateOfBirth(profileData.dateOfBirth || '');
+              setShareWorkouts(profileData.shareWorkouts ?? true); // Update shareWorkouts state
             }
           });
 
@@ -295,7 +313,9 @@
             if (friendsData) {
               for (const friendUid in friendsData) {
                 const friendInfo = friendsData[friendUid];
-                if (friendInfo.visible) {
+                const friendProfileSnapshot = await db.ref(`users/${friendUid}/profile`).once('value');
+                const friendProfile = friendProfileSnapshot.val();
+                if (friendProfile?.shareWorkouts) { // Check friend's shareWorkouts setting
                   const friendWorkoutsSnapshot = await db.ref(`users/${friendUid}/workouts`).once('value');
                   const friendWorkoutsData = friendWorkoutsSnapshot.val();
                   if (friendWorkoutsData) {
@@ -385,13 +405,18 @@
       }, [showAddPopup, selectedDate, currentUserWorkouts]); // Add currentUserWorkouts to dependency array
 
       useEffect(() => {
-        if (showAddPopup && newWorkoutType && selectedDate) {
-          const filtered = getUniqueWorkoutTypes(currentUserWorkouts).filter(type =>
-            type.toLowerCase().includes(newWorkoutType.toLowerCase())
-          );
-          setSuggestions(filtered);
+        if (showAddPopup && selectedDate) {
+          const allUniqueTypes = getUniqueWorkoutTypes(currentUserWorkouts);
+          if (newWorkoutType) {
+            const filtered = allUniqueTypes.filter(type =>
+              type.toLowerCase().includes(newWorkoutType.toLowerCase())
+            );
+            setSuggestions(filtered);
+          } else {
+            setSuggestions(allUniqueTypes); // Show all suggestions when input is empty
+          }
         }
-      }, [newWorkoutType, showAddPopup, selectedDate]);
+      }, [newWorkoutType, showAddPopup, selectedDate, currentUserWorkouts]); // Added currentUserWorkouts to dependency array
 
       useEffect(() => {
         setSelectedExercise(''); // Reset selected exercise when user changes
@@ -430,11 +455,12 @@
             const filtered = filterWorkouts(userWorkouts, exerciseType);
 
             filtered.forEach(w => {
-              const workoutDate = new Date(w.date);
-              workoutDate.setHours(0, 0, 0, 0); // Normalize workoutDate to local midnight
-              // Check if workoutDate is within the selected week
+              const workoutDate = new Date(w.date); // This is already a local date if w.date is YYYY-MM-DD
+              workoutDate.setHours(0, 0, 0, 0); // Normalize to start of the day in local time for comparison
+              
+              // Check if workoutDate is within the selected week (using local time for comparison)
               if (workoutDate >= startOfWeek && workoutDate <= endOfWeek) {
-                const dayKey = workoutDate.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }); // Use local date string for key
+                const dayKey = workoutDate.toISOString().slice(0, 10); // Use YYYY-MM-DD based on local time
                 if (dataByDay[dayKey]) {
                   dataByDay[dayKey].sets += parseInt(w.sets || '0', 10);
                   dataByDay[dayKey].reps += parseInt(w.reps || '0', 10);
@@ -452,12 +478,12 @@
             for (let i = 0; i < 7; i++) {
               const currentDay = new Date(startOfWeek);
               currentDay.setDate(startOfWeek.getDate() + i);
-              currentDay.setHours(0, 0, 0, 0); // Ensure currentDay is normalized for label
-              const dayKey = currentDay.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' });
-              labels.push(daysOfWeek[i] + ' ' + currentDay.getDate()); // e.g., "Mon 14"
-              setsData.push(dataByDay[dayKey].sets);
-              repsData.push(dataByDay[dayKey].reps);
-              weightData.push(dataByDay[dayKey].weight);
+              currentDay.setHours(0, 0, 0, 0); // Normalize to start of the day in local time
+              const dayKey = currentDay.toISOString().slice(0, 10); // Use YYYY-MM-DD based on local time
+              labels.push(daysOfWeek[i] + ' ' + currentDay.getDate()); // Use getDate for label
+              setsData.push(dataByDay[dayKey]?.sets || 0); // Use optional chaining and default to 0
+              repsData.push(dataByDay[dayKey]?.reps || 0);
+              weightData.push(dataByDay[dayKey]?.weight || 0);
             }
 
             return { labels, setsData, repsData, weightData };
@@ -596,7 +622,8 @@
           await db.ref(`users/${currentUser.uid}/profile`).update({
             firstName: firstName,
             lastName: lastName,
-            dateOfBirth: dateOfBirth
+            dateOfBirth: dateOfBirth,
+            shareWorkouts: shareWorkouts // Update shareWorkouts in profile
           });
           setSettingsError('Profile updated successfully');
         } catch (error) {
@@ -612,13 +639,26 @@
             return;
           }
           const newWorkoutRef = db.ref(`users/${currentUser.uid}/workouts`).push();
-          const newWorkout = { type: newWorkoutType, user: currentUser.username, date: selectedDate, sets: '0', reps: '0', weight: '0' };
-          await newWorkoutRef.set(newWorkout);
-          setNewWorkoutType('');
-          setWorkoutError('');
-          setShowAddPopup(false);
-          setSuggestions([]);
-          setIsDropdownOpen(false);
+          const newWorkoutData = { type: newWorkoutType, user: currentUser.username, date: selectedDate, sets: '0', reps: '0', weight: '0' };
+          try {
+            await newWorkoutRef.set(newWorkoutData);
+            setNewWorkoutType('');
+            setWorkoutError('');
+            setShowAddPopup(false); // Close modal on success
+            setSuggestions([]);
+            setIsDropdownOpen(false);
+          } catch (error) {
+            console.error("Error adding workout:", error);
+            if (!navigator.onLine) {
+              const localWorkouts = JSON.parse(localStorage.getItem('offlineWorkouts')) || [];
+              localWorkouts.push({ id: newWorkoutRef.key, userUid: currentUser.uid, action: 'add', data: newWorkoutData, status: 'pending' });
+              localStorage.setItem('offlineWorkouts', JSON.stringify(localWorkouts));
+              setWorkoutError('Failed to add workout. Data saved locally and will sync when online.');
+            } else {
+              setWorkoutError('Failed to add workout. Please try again.');
+            }
+            setShowAddPopup(false); // Close modal even on error
+          }
         } else {
           setWorkoutError('Please enter a workout type');
         }
@@ -626,29 +666,60 @@
 
       const updateWorkout = async () => {
         if (editWorkout.type) {
-          await db.ref(`users/${currentUser.uid}/workouts/${editWorkout.id}`).set({
-            type: editWorkout.type,
-            user: editWorkout.user,
-            date: editWorkout.date,
-            sets: editWorkout.sets,
-            reps: editWorkout.reps,
-            weight: editWorkout.weight
-          });
-          setEditWorkout(null);
-          setWorkoutError('');
-          setShowAddPopup(false);
-          setSuggestions([]);
-          setIsDropdownOpen(false);
-          setIsEditingExercise(false); // Close editing field
-          setSelectedExercise(null); // Deselect exercise
+          try {
+            await db.ref(`users/${currentUser.uid}/workouts/${editWorkout.id}`).set({
+              type: editWorkout.type,
+              user: editWorkout.user,
+              date: editWorkout.date,
+              sets: editWorkout.sets,
+              reps: editWorkout.reps,
+              weight: editWorkout.weight
+            });
+            setEditWorkout(null);
+            setWorkoutError('');
+            setShowAddPopup(false); // Close modal on success
+            setSuggestions([]);
+            setIsDropdownOpen(false);
+            setIsEditingExercise(false); // Close editing field
+            setSelectedExercise(null); // Deselect exercise
+          } catch (error) {
+            console.error("Error updating workout:", error);
+            if (!navigator.onLine) {
+              const localWorkouts = JSON.parse(localStorage.getItem('offlineWorkouts')) || [];
+              const existingIndex = localWorkouts.findIndex(w => w.id === editWorkout.id);
+              if (existingIndex > -1) {
+                localWorkouts[existingIndex] = { id: editWorkout.id, userUid: currentUser.uid, action: 'update', data: updatedWorkoutData, status: 'pending' };
+              } else {
+                localWorkouts.push({ id: editWorkout.id, userUid: currentUser.uid, action: 'update', data: updatedWorkoutData, status: 'pending' });
+              }
+              localStorage.setItem('offlineWorkouts', JSON.stringify(localWorkouts));
+              setWorkoutError('Failed to update workout. Data saved locally and will sync when online.');
+            } else {
+              setWorkoutError('Failed to update workout. Please try again.');
+            }
+            setShowAddPopup(false); // Close modal even on error
+          }
         } else {
           setWorkoutError('Please enter a workout type');
         }
       };
 
       const confirmDeleteWorkout = async (id) => {
-        await db.ref(`users/${currentUser.uid}/workouts/${id}`).remove();
-        setShowDeleteWorkoutPopup(null);
+        try {
+          await db.ref(`users/${currentUser.uid}/workouts/${id}`).remove();
+          setShowDeleteWorkoutPopup(null); // Close modal on success
+        } catch (error) {
+          console.error("Error deleting workout:", error);
+          if (!navigator.onLine) {
+            const localWorkouts = JSON.parse(localStorage.getItem('offlineWorkouts')) || [];
+            const updatedLocalWorkouts = localWorkouts.filter(w => w.id !== id);
+            localStorage.setItem('offlineWorkouts', JSON.stringify(updatedLocalWorkouts));
+            setWorkoutError('Failed to delete workout. Data saved locally and will sync when online.');
+          } else {
+            setWorkoutError('Failed to delete workout. Please try again.');
+          }
+          setShowDeleteWorkoutPopup(null); // Close modal even on error
+        }
       };
 
       const updateWorkoutMetrics = async (id, metrics) => {
@@ -756,16 +827,18 @@
 
       const getStartOfWeek = (date) => {
         const d = new Date(date);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Monday start
-        return new Date(d.getFullYear(), d.getMonth(), diff);
+        d.setHours(0, 0, 0, 0); // Normalize to start of the day in local time
+        const day = d.getDay(); // 0 for Sunday, 1 for Monday, ..., 6 for Saturday
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust to Monday of the current week
+        d.setDate(diff);
+        return d;
       };
 
       const getEndOfWeek = (date) => {
         const startOfWeek = getStartOfWeek(date);
         const endOfWeek = new Date(startOfWeek);
         endOfWeek.setDate(startOfWeek.getDate() + 6);
-        endOfWeek.setHours(23, 59, 59, 999); // Set to end of the day
+        endOfWeek.setHours(23, 59, 59, 999); // Set to end of the day in local time
         return endOfWeek;
       };
 
@@ -786,7 +859,12 @@
       };
 
       const getWorkoutsForDate = (date, userWorkouts) => {
-        return userWorkouts.filter(w => w.date === date);
+        // Normalize the input date to YYYY-MM-DD for consistent comparison
+        const normalizedDate = new Date(date).toISOString().slice(0, 10);
+        return userWorkouts.filter(w => {
+          const workoutDate = new Date(w.date);
+          return workoutDate.toISOString().slice(0, 10) === normalizedDate;
+        });
       };
 
       const getWorkoutDays = (userWorkouts) => {
@@ -909,9 +987,9 @@
                               type="text"
                               placeholder="Workout Type (e.g., Running)"
                               value={newWorkoutType}
-                              onChange={(e) => setNewWorkoutType(e.target.value)}
+                              onChange={(e) => { setNewWorkoutType(e.target.value); setIsDropdownOpen(true); }}
                               onFocus={() => setIsDropdownOpen(true)}
-                              onBlur={() => setTimeout(() => setIsDropdownOpen(false), 200)}
+                              
                               className="w-full p-2 border rounded"
                             />
                             {isDropdownOpen && suggestions.length > 0 && (
@@ -966,9 +1044,10 @@
                     {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => <div key={day} className="text-center font-medium">{day}</div>)}
                     {Array(getDaysInMonth().offset).fill(null).map((_, i) => <div key={`empty-${i}`} className="p-2"></div>)}
                     {getDaysInMonth().daysArray.map(day => {
+                      // Construct date string in YYYY-MM-DD format for consistency
                       const date = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                       const currentUserHasWorkouts = getWorkoutDays(currentUserWorkouts).has(date);
-                      const anyFriendHasWorkouts = getWorkoutDays(allFriendsWorkouts).has(date); // Use allFriendsWorkouts
+                      const anyFriendHasWorkouts = getWorkoutDays(allFriendsWorkouts).has(date);
                       const today = isToday(day);
 
                       let bgColorClass = 'bg-gray-50';
@@ -1063,6 +1142,16 @@
                     <input type="text" placeholder="First Name" value={firstName} onChange={(e) => setFirstName(e.target.value)} className="w-full p-2 border rounded" />
                     <input type="text" placeholder="Last Name" value={lastName} onChange={(e) => setLastName(e.target.value)} className="w-full p-2 border rounded" />
                     <input type="date" placeholder="Date of Birth" value={dateOfBirth} onChange={(e) => setDateOfBirth(e.target.value)} className="w-full p-2 border rounded" />
+                    <div className="flex items-center">
+                      <input
+                        type="checkbox"
+                        id="shareWorkouts"
+                        checked={shareWorkouts}
+                        onChange={(e) => setShareWorkouts(e.target.checked)}
+                        className="mr-2"
+                      />
+                      <label htmlFor="shareWorkouts" className="text-gray-700">Share my workouts with friends</label>
+                    </div>
                     <button onClick={handleUpdateProfile} className="w-full p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Update Profile</button>
                   </div>
                 </div>
