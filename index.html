@@ -198,6 +198,7 @@
       const [workouts, setWorkouts] = useState([]);
       const [currentUserWorkouts, setCurrentUserWorkouts] = useState([]); // New state for current user's workouts
       const [friendWorkouts, setFriendWorkouts] = useState([]);
+      const [chartWorkouts, setChartWorkouts] = useState([]); // New state for chart-specific workouts
       const [allFriendsWorkouts, setAllFriendsWorkouts] = useState([]); // New state for all friends' workouts combined
       const [friends, setFriends] = useState([]);
       const [newWorkoutType, setNewWorkoutType] = useState('');
@@ -262,6 +263,15 @@
             const workoutsData = snapshot.val();
             const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
             setWorkouts(loadedWorkouts); // This is used for the table display
+          });
+
+          // Load workouts for the selected user for charts
+          const workoutsToLoadUidForCharts = selectedUserForWorkouts;
+          const workoutsRefForCharts = db.ref(`users/${workoutsToLoadUidForCharts}/workouts`);
+          workoutsRefForCharts.on('value', (snapshot) => {
+            const workoutsData = snapshot.val();
+            const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
+            setChartWorkouts(loadedWorkouts);
           });
 
           // Load all visible friends' workouts for calendar display
@@ -340,6 +350,7 @@
             userProfileRef.off();
             currentUserWorkoutsRef.off(); // Corrected from workoutsRef
             workoutsRefForTableView.off(); // Added this line for the table view workouts
+            workoutsRefForCharts.off(); // Add this cleanup for chart workouts
             userFriendsRef.off();
             friendRequestsRef.off();
             if (selectedFriend) {
@@ -347,7 +358,7 @@
             }
           };
         }
-      }, [currentUser, selectedFriend, selectedUserForWorkouts, currentUserWorkouts]); // Added currentUserWorkouts to dependency array
+      }, [currentUser, selectedFriend, selectedUserForWorkouts, currentUserWorkouts, chartWorkouts]); // Added currentUserWorkouts and chartWorkouts to dependency array
 
       useEffect(() => {
         setSettingsError('');
@@ -371,6 +382,9 @@
 
       useEffect(() => {
         setSelectedExercise(''); // Reset selected exercise when user changes
+        if (selectedUserForWorkouts === currentUser.uid) {
+          setCompareMode(false); // Turn off compare mode if "Me" is selected
+        }
       }, [selectedUserForWorkouts]);
 
       useEffect(() => {
@@ -395,16 +409,19 @@
             for (let i = 0; i < 7; i++) {
               const currentDay = new Date(startOfWeek);
               currentDay.setDate(startOfWeek.getDate() + i);
-              dataByDay[currentDay.toISOString().split('T')[0]] = { sets: 0, reps: 0, weight: 0, count: 0 };
+              // Normalize currentDay to local midnight for consistent key generation
+              currentDay.setHours(0, 0, 0, 0);
+              dataByDay[currentDay.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' })] = { sets: 0, reps: 0, weight: 0, count: 0 };
             }
 
             const filtered = filterWorkouts(userWorkouts, exerciseType);
 
             filtered.forEach(w => {
               const workoutDate = new Date(w.date);
+              workoutDate.setHours(0, 0, 0, 0); // Normalize workoutDate to local midnight
               // Check if workoutDate is within the selected week
               if (workoutDate >= startOfWeek && workoutDate <= endOfWeek) {
-                const dayKey = workoutDate.toISOString().split('T')[0];
+                const dayKey = workoutDate.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }); // Use local date string for key
                 if (dataByDay[dayKey]) {
                   dataByDay[dayKey].sets += parseInt(w.sets || '0', 10);
                   dataByDay[dayKey].reps += parseInt(w.reps || '0', 10);
@@ -422,7 +439,8 @@
             for (let i = 0; i < 7; i++) {
               const currentDay = new Date(startOfWeek);
               currentDay.setDate(startOfWeek.getDate() + i);
-              const dayKey = currentDay.toISOString().split('T')[0];
+              currentDay.setHours(0, 0, 0, 0); // Ensure currentDay is normalized for label
+              const dayKey = currentDay.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' });
               labels.push(daysOfWeek[i] + ' ' + currentDay.getDate()); // e.g., "Mon 14"
               setsData.push(dataByDay[dayKey].sets);
               repsData.push(dataByDay[dayKey].reps);
@@ -432,13 +450,11 @@
             return { labels, setsData, repsData, weightData };
           };
 
-          let { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise, selectedChartDate);
+          let { labels, setsData, repsData, weightData } = processChartData(chartWorkouts, selectedExercise, selectedChartDate);
           let currentUserChartData = { labels: [], setsData: [], repsData: [], weightData: [] };
 
           if (compareMode && selectedUserForWorkouts !== currentUser.uid) {
             currentUserChartData = processChartData(currentUserWorkouts, selectedExercise, selectedChartDate);
-            // When comparing, ensure labels are consistent (Monday-Sunday)
-            // No need to merge labels as they are fixed to Mon-Sun for the selected week
           }
 
           const datasets = [];
@@ -736,6 +752,7 @@
         const startOfWeek = getStartOfWeek(date);
         const endOfWeek = new Date(startOfWeek);
         endOfWeek.setDate(startOfWeek.getDate() + 6);
+        endOfWeek.setHours(23, 59, 59, 999); // Set to end of the day
         return endOfWeek;
       };
 
@@ -1006,11 +1023,13 @@
                 </select>
               </div>
 
-              <div className="mb-4">
-                <button onClick={() => setCompareMode(!compareMode)} className={`p-2 rounded ${compareMode ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'} hover:bg-blue-600`}>
-                  {compareMode ? 'Stop Comparing' : 'Compare with My Data'}
-                </button>
-              </div>
+              {selectedUserForWorkouts !== currentUser.uid && (
+                <div className="mb-4">
+                  <button onClick={() => setCompareMode(!compareMode)} className={`p-2 rounded ${compareMode ? 'bg-red-500 text-white' : 'bg-blue-500 text-white'} hover:bg-blue-600`}>
+                    {compareMode ? 'Stop Comparing' : 'Compare with My Data'}
+                  </button>
+                </div>
+              )}
 
               <div style={{ position: 'relative', height: '400px', width: '100%', marginBottom: '20px' }}>
                 {workouts.length > 0 ? <canvas ref={chartRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}></canvas> : <p className="text-gray-500">No workouts to display yet.</p>}
