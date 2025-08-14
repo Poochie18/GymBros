@@ -196,6 +196,8 @@
 
     const WorkoutTracker = ({ currentUser }) => {
       const [workouts, setWorkouts] = useState([]);
+      const [currentUserWorkouts, setCurrentUserWorkouts] = useState([]); // New state for current user's workouts
+      const [friendWorkouts, setFriendWorkouts] = useState([]); // New state for friend's workouts
       const [friends, setFriends] = useState([]);
       const [newWorkoutType, setNewWorkoutType] = useState('');
       const [newFriend, setNewFriend] = useState('');
@@ -208,8 +210,8 @@
       const [firstName, setFirstName] = useState('');
       const [lastName, setLastName] = useState('');
       const [dateOfBirth, setDateOfBirth] = useState('');
-      const [showNewPassword, setShowNewPassword] = useState(false); // New state for new password visibility
-      const [friendRequests, setFriendRequests] = useState([]); // New state for friend requests
+      const [showNewPassword, setShowNewPassword] = useState(false);
+      const [friendRequests, setFriendRequests] = useState([]);
       const [selectedDate, setSelectedDate] = useState(null);
       const [editWorkout, setEditWorkout] = useState(null);
       const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
@@ -242,13 +244,34 @@
             }
           });
 
+          // Load current user's workouts
+          const currentUserWorkoutsRef = db.ref(`users/${currentUser.uid}/workouts`);
+          currentUserWorkoutsRef.on('value', (snapshot) => {
+            const workoutsData = snapshot.val();
+            const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
+            setCurrentUserWorkouts(loadedWorkouts);
+          });
+
+          // Load workouts for the selected user (either current user or friend)
           const workoutsToLoadUid = selectedUserForWorkouts;
           const workoutsRef = db.ref(`users/${workoutsToLoadUid}/workouts`);
           workoutsRef.on('value', (snapshot) => {
             const workoutsData = snapshot.val();
             const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
-            setWorkouts(loadedWorkouts);
+            setWorkouts(loadedWorkouts); // This is used for the table display
           });
+
+          // Load selected friend's workouts if a friend is selected
+          if (selectedUserForWorkouts !== currentUser.uid) {
+            const friendWorkoutsRef = db.ref(`users/${selectedUserForWorkouts}/workouts`);
+            friendWorkoutsRef.on('value', (snapshot) => {
+              const workoutsData = snapshot.val();
+              const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
+              setFriendWorkouts(loadedWorkouts);
+            });
+          } else {
+            setFriendWorkouts([]); // Clear friend workouts if "Me" is selected
+          }
 
           const userFriendsRef = db.ref(`users/${currentUser.uid}/friends`);
           userFriendsRef.on('value', async (snapshot) => {
@@ -688,6 +711,10 @@
         return userWorkouts.filter(w => w.date === date);
       };
 
+      const getWorkoutDays = (userWorkouts) => {
+        return new Set(userWorkouts.map(w => w.date));
+      };
+
       const getUniqueWorkoutTypes = () => {
         return [...new Set(workouts.map(w => w.type))];
       };
@@ -860,11 +887,24 @@
                     {Array(getDaysInMonth().offset).fill(null).map((_, i) => <div key={`empty-${i}`} className="p-2"></div>)}
                     {getDaysInMonth().daysArray.map(day => {
                       const date = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                      const hasWorkouts = getWorkoutsForDate(date, workouts).length > 0;
+                      const currentUserHasWorkouts = getWorkoutDays(currentUserWorkouts).has(date);
+                      const friendHasWorkouts = getWorkoutDays(friendWorkouts).has(date);
                       const today = isToday(day);
+
+                      let bgColorClass = 'bg-gray-50';
+                      let content = day;
+
+                      if (currentUserHasWorkouts && friendHasWorkouts) {
+                        bgColorClass = 'bg-gradient-to-br from-green-100 to-yellow-100';
+                      } else if (currentUserHasWorkouts) {
+                        bgColorClass = 'bg-green-100';
+                      } else if (friendHasWorkouts) {
+                        bgColorClass = 'bg-yellow-100';
+                      }
+
                       return (
-                        <button key={day} onClick={() => setSelectedDate(date)} className={`p-2 rounded flex items-center justify-center ${hasWorkouts ? 'bg-green-100' : 'bg-gray-50'} hover:bg-blue-200`}>
-                          {day}{today && <span className="ml-1 text-yellow-500">★</span>}
+                        <button key={day} onClick={() => setSelectedDate(date)} className={`p-2 rounded flex items-center justify-center ${bgColorClass} hover:bg-blue-200`}>
+                          {content}{today && <span className="ml-1 text-yellow-500">★</span>}
                         </button>
                       );
                     })}
@@ -875,7 +915,7 @@
           )}
 
           {currentTab === 'charts' && (
-            <div className="p-4 bg-white rounded-lg shadow">
+            <div className="p-4 bg-white rounded-lg shadow relative" style={{ height: '400px' }}>
               <h2 className="text-xl font-semibold mb-4">Workout Progress Charts</h2>
               <div className="mb-4">
                 <label htmlFor="chart-user-select" className="block text-sm font-medium text-gray-700 mb-1">View Charts For:</label>
@@ -915,7 +955,7 @@
                 </button>
               </div>
 
-              {workouts.length > 0 ? <canvas ref={chartRef}></canvas> : <p className="text-gray-500">No workouts to display yet.</p>}
+              {workouts.length > 0 ? <canvas ref={chartRef} className="absolute inset-0 w-full h-full"></canvas> : <p className="text-gray-500">No workouts to display yet.</p>}
             </div>
           )}
 
@@ -1033,43 +1073,43 @@
                     {getUniqueWorkoutTypes().map(type => (
                       <li key={type} className="p-2 bg-gray-50 rounded cursor-pointer hover:bg-gray-100" onClick={() => setSelectedExercise(type)}>
                         {type}
+                        {selectedExercise === type && (
+                          <div className="mt-2 p-4 bg-gray-100 rounded-lg">
+                            <h4 className="text-md font-medium mb-2">{selectedExercise}</h4>
+                            {isEditingExercise ? (
+                              <>
+                                <textarea
+                                  value={exerciseDescription}
+                                  onChange={(e) => setExerciseDescription(e.target.value)}
+                                  className="w-full p-2 border rounded mb-2"
+                                  rows="3"
+                                ></textarea>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={(e) => { /* Implement image upload logic here */ }}
+                                  className="mb-2"
+                                />
+                                <div className="flex justify-end space-x-2 mt-4">
+                                  <button onClick={() => { /* Implement save logic here */ }} className="p-2 bg-green-500 text-white rounded hover:bg-green-600">Save</button>
+                                  <button onClick={() => setIsEditingExercise(false)} className="p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Cancel</button>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <p className="mb-2">Description: {exerciseDescription || `A basic ${selectedExercise.toLowerCase()} exercise targeting major muscle groups.`}</p>
+                                {exerciseImage && <img src={exerciseImage} alt="Exercise" className="max-w-full h-auto mb-2" />}
+                                <div className="flex justify-between items-center mt-4">
+                                  <button onClick={() => setIsEditingExercise(true)} className="p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Edit</button>
+                                  <button onClick={() => setSelectedExercise(null)} className="p-2 bg-red-500 text-white rounded hover:bg-red-600">Close</button>
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
-                  {selectedExercise && (
-                    <div className="mt-2 p-4 bg-gray-50 rounded-lg">
-                      <h4 className="text-md font-medium mb-2">{selectedExercise}</h4>
-                      {isEditingExercise ? (
-                        <>
-                          <textarea
-                            value={exerciseDescription}
-                            onChange={(e) => setExerciseDescription(e.target.value)}
-                            className="w-full p-2 border rounded mb-2"
-                            rows="3"
-                          ></textarea>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => { /* Implement image upload logic here */ }}
-                            className="mb-2"
-                          />
-                          <div className="flex justify-end space-x-2 mt-4">
-                            <button onClick={() => { /* Implement save logic here */ }} className="p-2 bg-green-500 text-white rounded hover:bg-green-600">Save</button>
-                            <button onClick={() => setIsEditingExercise(false)} className="p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Cancel</button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <p className="mb-2">Description: {exerciseDescription || `A basic ${selectedExercise.toLowerCase()} exercise targeting major muscle groups.`}</p>
-                          {exerciseImage && <img src={exerciseImage} alt="Exercise" className="max-w-full h-auto mb-2" />}
-                          <div className="flex justify-between items-center mt-4">
-                            <button onClick={() => setIsEditingExercise(true)} className="p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Edit</button>
-                            <button onClick={() => setSelectedExercise(null)} className="p-2 bg-red-500 text-white rounded hover:bg-red-600">Close</button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
                 </div>
 
                 {/* Logout */}
