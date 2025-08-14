@@ -460,7 +460,7 @@
               
               // Check if workoutDate is within the selected week (using local time for comparison)
               if (workoutDate >= startOfWeek && workoutDate <= endOfWeek) {
-                const dayKey = workoutDate.toISOString().slice(0, 10); // Use YYYY-MM-DD based on local time
+                const dayKey = workoutDate.toLocaleDateString('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit' }); // Use YYYY-MM-DD based on local time
                 if (dataByDay[dayKey]) {
                   dataByDay[dayKey].sets += parseInt(w.sets || '0', 10);
                   dataByDay[dayKey].reps += parseInt(w.reps || '0', 10);
@@ -868,7 +868,7 @@
       };
 
       const getWorkoutDays = (userWorkouts) => {
-        return new Set(userWorkouts.map(w => w.date));
+        return new Set(userWorkouts.map(w => new Date(w.date).toISOString().slice(0, 10)));
       };
 
       const getUniqueWorkoutTypes = (workoutList) => {
@@ -1047,7 +1047,7 @@
                       // Construct date string in YYYY-MM-DD format for consistency
                       const date = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                       const currentUserHasWorkouts = getWorkoutDays(currentUserWorkouts).has(date);
-                      const anyFriendHasWorkouts = getWorkoutDays(allFriendsWorkouts).has(date);
+                      const anyFriendHasWorkouts = allFriendsWorkouts.some(w => new Date(w.date).toISOString().slice(0, 10) === date);
                       const today = isToday(day);
 
                       let bgColorClass = 'bg-gray-50';
@@ -1109,7 +1109,7 @@
                   className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">All Exercises</option>
-                  {getUniqueWorkoutTypes(workouts).map(type => (
+                  {getUniqueWorkoutTypes(chartWorkouts).map(type => (
                     <option key={type} value={type}>{type}</option>
                   ))}
                 </select>
