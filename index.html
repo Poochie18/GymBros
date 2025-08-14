@@ -217,6 +217,7 @@
       const [editWorkout, setEditWorkout] = useState(null);
       const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
       const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+      const [selectedChartDate, setSelectedChartDate] = useState(new Date()); // New state for chart's selected date
       const [showAddPopup, setShowAddPopup] = useState(false);
       const [showDeleteWorkoutPopup, setShowDeleteWorkoutPopup] = useState(null);
       const [showDeleteFriendPopup, setShowDeleteFriendPopup] = useState(null);
@@ -369,6 +370,10 @@
       }, [newWorkoutType, showAddPopup, selectedDate]);
 
       useEffect(() => {
+        setSelectedExercise(''); // Reset selected exercise when user changes
+      }, [selectedUserForWorkouts]);
+
+      useEffect(() => {
         if (currentTab === 'charts' && chartRef.current) {
           if (chartInstanceRef.current) {
             chartInstanceRef.current.destroy();
@@ -380,39 +385,60 @@
               : userWorkouts;
           };
 
-          const processChartData = (userWorkouts, exerciseType) => {
+          const processChartData = (userWorkouts, exerciseType, chartDate) => {
+            const startOfWeek = getStartOfWeek(chartDate);
+            const endOfWeek = getEndOfWeek(chartDate);
+            const daysOfWeek = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            const dataByDay = {};
+
+            // Initialize data for each day of the week
+            for (let i = 0; i < 7; i++) {
+              const currentDay = new Date(startOfWeek);
+              currentDay.setDate(startOfWeek.getDate() + i);
+              dataByDay[currentDay.toISOString().split('T')[0]] = { sets: 0, reps: 0, weight: 0, count: 0 };
+            }
+
             const filtered = filterWorkouts(userWorkouts, exerciseType);
-            const dataByWeek = {};
 
             filtered.forEach(w => {
-              const date = new Date(w.date);
-              const startOfWeek = new Date(date.setDate(date.getDate() - date.getDay() + (date.getDay() === 0 ? -6 : 1))); // Monday as start of week
-              const weekKey = startOfWeek.toISOString().split('T')[0];
-
-              if (!dataByWeek[weekKey]) {
-                dataByWeek[weekKey] = { sets: 0, reps: 0, weight: 0, count: 0 };
+              const workoutDate = new Date(w.date);
+              // Check if workoutDate is within the selected week
+              if (workoutDate >= startOfWeek && workoutDate <= endOfWeek) {
+                const dayKey = workoutDate.toISOString().split('T')[0];
+                if (dataByDay[dayKey]) {
+                  dataByDay[dayKey].sets += parseInt(w.sets || '0', 10);
+                  dataByDay[dayKey].reps += parseInt(w.reps || '0', 10);
+                  dataByDay[dayKey].weight += parseInt(w.weight || '0', 10);
+                  dataByDay[dayKey].count++;
+                }
               }
-              dataByWeek[weekKey].sets += parseInt(w.sets || '0', 10);
-              dataByWeek[weekKey].reps += parseInt(w.reps || '0', 10);
-              dataByWeek[weekKey].weight += parseInt(w.weight || '0', 10);
-              dataByWeek[weekKey].count++;
             });
 
-            const labels = Object.keys(dataByWeek).sort();
-            const setsData = labels.map(key => dataByWeek[key].sets);
-            const repsData = labels.map(key => dataByWeek[key].reps);
-            const weightData = labels.map(key => dataByWeek[key].weight);
+            const labels = [];
+            const setsData = [];
+            const repsData = [];
+            const weightData = [];
+
+            for (let i = 0; i < 7; i++) {
+              const currentDay = new Date(startOfWeek);
+              currentDay.setDate(startOfWeek.getDate() + i);
+              const dayKey = currentDay.toISOString().split('T')[0];
+              labels.push(daysOfWeek[i] + ' ' + currentDay.getDate()); // e.g., "Mon 14"
+              setsData.push(dataByDay[dayKey].sets);
+              repsData.push(dataByDay[dayKey].reps);
+              weightData.push(dataByDay[dayKey].weight);
+            }
 
             return { labels, setsData, repsData, weightData };
           };
 
-          let { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise);
+          let { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise, selectedChartDate);
           let currentUserChartData = { labels: [], setsData: [], repsData: [], weightData: [] };
 
           if (compareMode && selectedUserForWorkouts !== currentUser.uid) {
-            currentUserChartData = processChartData(currentUserWorkouts, selectedExercise);
-            const allLabels = new Set([...labels, ...currentUserChartData.labels]);
-            labels = Array.from(allLabels).sort();
+            currentUserChartData = processChartData(currentUserWorkouts, selectedExercise, selectedChartDate);
+            // When comparing, ensure labels are consistent (Monday-Sunday)
+            // No need to merge labels as they are fixed to Mon-Sun for the selected week
           }
 
           const datasets = [];
@@ -504,7 +530,7 @@
             chartInstanceRef.current = null;
           }
         };
-      }, [currentTab, selectedUserForWorkouts, selectedExercise, compareMode]);
+      }, [currentTab, selectedUserForWorkouts, selectedExercise, compareMode, selectedChartDate]);
 
       const handleLogout = async () => {
         try {
@@ -697,6 +723,28 @@
         const snapshot = await friendRef.once('value');
         const currentVisibility = snapshot.val()?.visible;
         await friendRef.update({ visible: !currentVisibility });
+      };
+
+      const getStartOfWeek = (date) => {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust for Monday start
+        return new Date(d.getFullYear(), d.getMonth(), diff);
+      };
+
+      const getEndOfWeek = (date) => {
+        const startOfWeek = getStartOfWeek(date);
+        const endOfWeek = new Date(startOfWeek);
+        endOfWeek.setDate(startOfWeek.getDate() + 6);
+        return endOfWeek;
+      };
+
+      const changeWeek = (delta) => {
+        setSelectedChartDate(prevDate => {
+          const newDate = new Date(prevDate);
+          newDate.setDate(prevDate.getDate() + delta * 7);
+          return newDate;
+        });
       };
 
       const getDaysInMonth = () => {
@@ -919,6 +967,13 @@
           {currentTab === 'charts' && (
             <div className="p-4 bg-white rounded-lg shadow">
               <h2 className="text-xl font-semibold mb-4">Workout Progress Charts</h2>
+              <div className="flex justify-between items-center mb-4">
+                <button onClick={() => changeWeek(-1)} className="p-2 bg-gray-300 rounded hover:bg-gray-400">Previous Week</button>
+                <h3 className="text-lg font-semibold">
+                  {getStartOfWeek(selectedChartDate).toLocaleDateString()} - {getEndOfWeek(selectedChartDate).toLocaleDateString()}
+                </h3>
+                <button onClick={() => changeWeek(1)} className="p-2 bg-gray-300 rounded hover:bg-gray-400">Next Week</button>
+              </div>
               <div className="mb-4">
                 <label htmlFor="chart-user-select" className="block text-sm font-medium text-gray-700 mb-1">View Charts For:</label>
                 <select
@@ -1077,40 +1132,6 @@
                     {getUniqueWorkoutTypes(currentUserWorkouts).map(type => (
                       <li key={type} className="p-2 bg-gray-50 rounded cursor-pointer hover:bg-gray-100" onClick={() => setSelectedExercise(type)}>
                         {type}
-                        {selectedExercise === type && (
-                          <div className="mt-2 p-4 bg-gray-100 rounded-lg">
-                            <h4 className="text-md font-medium mb-2">{selectedExercise}</h4>
-                            {isEditingExercise ? (
-                              <>
-                                <textarea
-                                  value={exerciseDescription}
-                                  onChange={(e) => setExerciseDescription(e.target.value)}
-                                  className="w-full p-2 border rounded mb-2"
-                                  rows="3"
-                                ></textarea>
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={(e) => { /* Implement image upload logic here */ }}
-                                  className="mb-2"
-                                />
-                                <div className="flex justify-end space-x-2 mt-4">
-                                  <button onClick={() => { /* Implement save logic here */ }} className="p-2 bg-green-500 text-white rounded hover:bg-green-600">Save</button>
-                                  <button onClick={() => { setIsEditingExercise(false); setSelectedExercise(null); }} className="p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Cancel</button>
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <p className="mb-2">Description: {exerciseDescription || `A basic ${selectedExercise.toLowerCase()} exercise targeting major muscle groups.`}</p>
-                                {exerciseImage && <img src={exerciseImage} alt="Exercise" className="max-w-full h-auto mb-2" />}
-                                <div className="flex justify-between items-center mt-4">
-                                  <button onClick={() => setIsEditingExercise(true)} className="p-2 bg-blue-500 text-white rounded hover:bg-blue-600">Edit</button>
-                                  <button onClick={() => { setIsEditingExercise(false); setSelectedExercise(null); }} className="p-2 bg-red-500 text-white rounded hover:bg-red-600">Close</button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        )}
                       </li>
                     ))}
                   </ul>
