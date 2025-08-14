@@ -254,9 +254,9 @@
           });
 
           // Load workouts for the selected user (either current user or friend) for the table view
-          const workoutsToLoadUidForTable = selectedUserForWorkouts;
-          const workoutsRefForTable = db.ref(`users/${workoutsToLoadUidForTable}/workouts`);
-          workoutsRefForTable.on('value', (snapshot) => {
+          const workoutsToLoadUidForTableView = selectedUserForWorkouts;
+          const workoutsRefForTableView = db.ref(`users/${workoutsToLoadUidForTableView}/workouts`);
+          workoutsRefForTableView.on('value', (snapshot) => {
             const workoutsData = snapshot.val();
             const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
             setWorkouts(loadedWorkouts); // This is used for the table display
@@ -359,7 +359,7 @@
 
       useEffect(() => {
         if (showAddPopup && newWorkoutType && selectedDate) {
-          const filtered = getUniqueWorkoutTypes().filter(type =>
+          const filtered = getUniqueWorkoutTypes(currentUserWorkouts).filter(type =>
             type.toLowerCase().includes(newWorkoutType.toLowerCase())
           );
           setSuggestions(filtered);
@@ -404,14 +404,13 @@
             return { labels, setsData, repsData, weightData };
           };
 
-          const { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise);
+          let { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise);
           let currentUserChartData = { labels: [], setsData: [], repsData: [], weightData: [] };
 
           if (compareMode && selectedUserForWorkouts !== currentUser.uid) {
             currentUserChartData = processChartData(currentUserWorkouts, selectedExercise);
-            // Merge labels from both datasets to ensure all weeks are displayed
             const allLabels = new Set([...labels, ...currentUserChartData.labels]);
-            labels.splice(0, labels.length, ...Array.from(allLabels).sort());
+            labels = Array.from(allLabels).sort();
           }
 
           const datasets = [];
@@ -496,109 +495,6 @@
             }
           });
 
-          const { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise);
-
-          const datasets = [];
-
-          if (setsData.length > 0) {
-            datasets.push({
-              label: 'Sets',
-              data: setsData,
-              backgroundColor: 'rgba(255, 99, 132, 0.5)', // Red
-              borderColor: 'rgba(255, 99, 132, 1)',
-              borderWidth: 1,
-              yAxisID: 'y'
-            });
-          }
-          if (repsData.length > 0) {
-            datasets.push({
-              label: 'Reps',
-              data: repsData,
-              backgroundColor: 'rgba(54, 162, 235, 0.5)', // Blue
-              borderColor: 'rgba(54, 162, 235, 1)',
-              borderWidth: 1,
-              yAxisID: 'y'
-            });
-          }
-          if (weightData.length > 0) {
-            datasets.push({
-              label: 'Weight',
-              data: weightData,
-              backgroundColor: 'rgba(75, 192, 192, 0.5)', // Green
-              borderColor: 'rgba(75, 192, 192, 1)',
-              borderWidth: 1,
-              yAxisID: 'y'
-            });
-          }
-
-          if (compareMode && selectedUserForWorkouts !== currentUser.uid) {
-            // No need to fetch current user's workouts again, it's already in currentUserWorkouts state
-            const { labels: currentUserLabels, setsData: currentUserSets, repsData: currentUserReps, weightData: currentUserWeight } = processChartData(currentUserWorkouts, selectedExercise);
-
-              if (currentUserSets.length > 0) {
-                datasets.push({
-                  label: 'My Sets',
-                  data: currentUserSets,
-                  backgroundColor: 'rgba(255, 99, 132, 0.2)', // Lighter Red
-                  borderColor: 'rgba(255, 99, 132, 0.8)',
-                  borderWidth: 1,
-                  yAxisID: 'y'
-                });
-              }
-              if (currentUserReps.length > 0) {
-                datasets.push({
-                  label: 'My Reps',
-                  data: currentUserReps,
-                  backgroundColor: 'rgba(54, 162, 235, 0.2)', // Lighter Blue
-                  borderColor: 'rgba(54, 162, 235, 0.8)',
-                  borderWidth: 1,
-                  yAxisID: 'y'
-                });
-              }
-              if (currentUserWeight.length > 0) {
-                datasets.push({
-                  label: 'My Weight',
-                  data: currentUserWeight,
-                  backgroundColor: 'rgba(75, 192, 192, 0.2)', // Lighter Green
-                  borderColor: 'rgba(75, 192, 192, 0.8)',
-                  borderWidth: 1,
-                  yAxisID: 'y'
-                });
-              }
-              
-              chartInstanceRef.current = new Chart(chartRef.current, {
-                type: 'bar',
-                data: {
-                  labels,
-                  datasets
-                },
-                options: {
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Value' } },
-                    x: { title: { display: true, text: 'Week Start Date' } }
-                  }
-                }
-              });
-            } else {
-              chartInstanceRef.current = new Chart(chartRef.current, {
-                type: 'bar',
-                data: {
-                  labels,
-                  datasets
-                },
-                options: {
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  scales: {
-                    y: { beginAtZero: true, title: { display: true, text: 'Value' } },
-                    x: { title: { display: true, text: 'Week Start Date' } }
-                  }
-                }
-              });
-            }
-          }
         }
         return () => {
           if (chartInstanceRef.current) {
@@ -815,8 +711,8 @@
         return new Set(userWorkouts.map(w => w.date));
       };
 
-      const getUniqueWorkoutTypes = () => {
-        return [...new Set(workouts.map(w => w.type))];
+      const getUniqueWorkoutTypes = (workoutList) => {
+        return [...new Set(workoutList.map(w => w.type))];
       };
 
       const changeMonth = (delta) => {
@@ -1026,7 +922,7 @@
                   className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="">All Exercises</option>
-                  {getUniqueWorkoutTypes().map(type => (
+                  {getUniqueWorkoutTypes(workouts).map(type => (
                     <option key={type} value={type}>{type}</option>
                   ))}
                 </select>
@@ -1155,7 +1051,7 @@
                 <div>
                   <h3 className="text-lg font-medium mb-2">Exercises</h3>
                   <ul className="space-y-2 max-h-60 overflow-y-auto">
-                    {getUniqueWorkoutTypes().map(type => (
+                    {getUniqueWorkoutTypes(currentUserWorkouts).map(type => (
                       <li key={type} className="p-2 bg-gray-50 rounded cursor-pointer hover:bg-gray-100" onClick={() => setSelectedExercise(type)}>
                         {type}
                         {selectedExercise === type && (
