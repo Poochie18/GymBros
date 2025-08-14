@@ -336,7 +336,8 @@
 
           return () => {
             userProfileRef.off();
-            workoutsRef.off();
+            currentUserWorkoutsRef.off(); // Corrected from workoutsRef
+            workoutsRefForTableView.off(); // Added this line for the table view workouts
             userFriendsRef.off();
             friendRequestsRef.off();
             if (selectedFriend) {
