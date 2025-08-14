@@ -197,7 +197,8 @@
     const WorkoutTracker = ({ currentUser }) => {
       const [workouts, setWorkouts] = useState([]);
       const [currentUserWorkouts, setCurrentUserWorkouts] = useState([]); // New state for current user's workouts
-      const [friendWorkouts, setFriendWorkouts] = useState([]); // New state for friend's workouts
+      const [friendWorkouts, setFriendWorkouts] = useState([]);
+      const [allFriendsWorkouts, setAllFriendsWorkouts] = useState([]); // New state for all friends' workouts combined
       const [friends, setFriends] = useState([]);
       const [newWorkoutType, setNewWorkoutType] = useState('');
       const [newFriend, setNewFriend] = useState('');
@@ -252,26 +253,36 @@
             setCurrentUserWorkouts(loadedWorkouts);
           });
 
-          // Load workouts for the selected user (either current user or friend)
-          const workoutsToLoadUid = selectedUserForWorkouts;
-          const workoutsRef = db.ref(`users/${workoutsToLoadUid}/workouts`);
-          workoutsRef.on('value', (snapshot) => {
+          // Load workouts for the selected user (either current user or friend) for the table view
+          const workoutsToLoadUidForTable = selectedUserForWorkouts;
+          const workoutsRefForTable = db.ref(`users/${workoutsToLoadUidForTable}/workouts`);
+          workoutsRefForTable.on('value', (snapshot) => {
             const workoutsData = snapshot.val();
             const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
             setWorkouts(loadedWorkouts); // This is used for the table display
           });
 
-          // Load selected friend's workouts if a friend is selected
-          if (selectedUserForWorkouts !== currentUser.uid) {
-            const friendWorkoutsRef = db.ref(`users/${selectedUserForWorkouts}/workouts`);
-            friendWorkoutsRef.on('value', (snapshot) => {
-              const workoutsData = snapshot.val();
-              const loadedWorkouts = workoutsData ? Object.keys(workoutsData).map(key => ({ id: key, ...workoutsData[key] })) : [];
-              setFriendWorkouts(loadedWorkouts);
-            });
-          } else {
-            setFriendWorkouts([]); // Clear friend workouts if "Me" is selected
-          }
+          // Load all visible friends' workouts for calendar display
+          const allFriendsWorkoutsRef = db.ref(`users/${currentUser.uid}/friends`);
+          allFriendsWorkoutsRef.on('value', async (snapshot) => {
+            const friendsData = snapshot.val();
+            const loadedAllFriendsWorkouts = [];
+            if (friendsData) {
+              for (const friendUid in friendsData) {
+                const friendInfo = friendsData[friendUid];
+                if (friendInfo.visible) {
+                  const friendWorkoutsSnapshot = await db.ref(`users/${friendUid}/workouts`).once('value');
+                  const friendWorkoutsData = friendWorkoutsSnapshot.val();
+                  if (friendWorkoutsData) {
+                    Object.keys(friendWorkoutsData).forEach(key => {
+                      loadedAllFriendsWorkouts.push({ id: key, ...friendWorkoutsData[key] });
+                    });
+                  }
+                }
+              }
+            }
+            setAllFriendsWorkouts(loadedAllFriendsWorkouts);
+          });
 
           const userFriendsRef = db.ref(`users/${currentUser.uid}/friends`);
           userFriendsRef.on('value', async (snapshot) => {
@@ -333,7 +344,7 @@
             }
           };
         }
-      }, [currentUser, selectedFriend, selectedUserForWorkouts]);
+      }, [currentUser, selectedFriend, selectedUserForWorkouts, currentUserWorkouts]); // Added currentUserWorkouts to dependency array
 
       useEffect(() => {
         setSettingsError('');
@@ -341,10 +352,10 @@
 
       useEffect(() => {
         if (showAddPopup && selectedDate) {
-          const uniqueTypes = getUniqueWorkoutTypes();
+          const uniqueTypes = getUniqueWorkoutTypes(currentUserWorkouts); // Pass currentUserWorkouts
           setSuggestions(uniqueTypes);
         }
-      }, [showAddPopup, selectedDate]);
+      }, [showAddPopup, selectedDate, currentUserWorkouts]); // Add currentUserWorkouts to dependency array
 
       useEffect(() => {
         if (showAddPopup && newWorkoutType && selectedDate) {
@@ -394,6 +405,14 @@
           };
 
           const { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise);
+          let currentUserChartData = { labels: [], setsData: [], repsData: [], weightData: [] };
+
+          if (compareMode && selectedUserForWorkouts !== currentUser.uid) {
+            currentUserChartData = processChartData(currentUserWorkouts, selectedExercise);
+            // Merge labels from both datasets to ensure all weeks are displayed
+            const allLabels = new Set([...labels, ...currentUserChartData.labels]);
+            labels.splice(0, labels.length, ...Array.from(allLabels).sort());
+          }
 
           const datasets = [];
 
@@ -429,11 +448,92 @@
           }
 
           if (compareMode && selectedUserForWorkouts !== currentUser.uid) {
-            // Fetch current user's workouts for comparison
-            db.ref(`users/${currentUser.uid}/workouts`).once('value', (snapshot) => {
-              const currentUserWorkoutsData = snapshot.val();
-              const currentUserWorkouts = currentUserWorkoutsData ? Object.keys(currentUserWorkoutsData).map(key => ({ id: key, ...currentUserWorkoutsData[key] })) : [];
-              const { setsData: currentUserSets, repsData: currentUserReps, weightData: currentUserWeight } = processChartData(currentUserWorkouts, selectedExercise);
+            if (currentUserChartData.setsData.length > 0) {
+              datasets.push({
+                label: 'My Sets',
+                data: currentUserChartData.setsData,
+                backgroundColor: 'rgba(255, 99, 132, 0.2)', // Lighter Red
+                borderColor: 'rgba(255, 99, 132, 0.8)',
+                borderWidth: 1,
+                yAxisID: 'y'
+              });
+            }
+            if (currentUserChartData.repsData.length > 0) {
+              datasets.push({
+                label: 'My Reps',
+                data: currentUserChartData.repsData,
+                backgroundColor: 'rgba(54, 162, 235, 0.2)', // Lighter Blue
+                borderColor: 'rgba(54, 162, 235, 0.8)',
+                borderWidth: 1,
+                yAxisID: 'y'
+              });
+            }
+            if (currentUserChartData.weightData.length > 0) {
+              datasets.push({
+                label: 'My Weight',
+                data: currentUserChartData.weightData,
+                backgroundColor: 'rgba(75, 192, 192, 0.2)', // Lighter Green
+                borderColor: 'rgba(75, 192, 192, 0.8)',
+                borderWidth: 1,
+                yAxisID: 'y'
+              });
+            }
+          }
+          
+          chartInstanceRef.current = new Chart(chartRef.current, {
+            type: 'bar',
+            data: {
+              labels,
+              datasets
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Value' } },
+                x: { title: { display: true, text: 'Week Start Date' } }
+              }
+            }
+          });
+
+          const { labels, setsData, repsData, weightData } = processChartData(workouts, selectedExercise);
+
+          const datasets = [];
+
+          if (setsData.length > 0) {
+            datasets.push({
+              label: 'Sets',
+              data: setsData,
+              backgroundColor: 'rgba(255, 99, 132, 0.5)', // Red
+              borderColor: 'rgba(255, 99, 132, 1)',
+              borderWidth: 1,
+              yAxisID: 'y'
+            });
+          }
+          if (repsData.length > 0) {
+            datasets.push({
+              label: 'Reps',
+              data: repsData,
+              backgroundColor: 'rgba(54, 162, 235, 0.5)', // Blue
+              borderColor: 'rgba(54, 162, 235, 1)',
+              borderWidth: 1,
+              yAxisID: 'y'
+            });
+          }
+          if (weightData.length > 0) {
+            datasets.push({
+              label: 'Weight',
+              data: weightData,
+              backgroundColor: 'rgba(75, 192, 192, 0.5)', // Green
+              borderColor: 'rgba(75, 192, 192, 1)',
+              borderWidth: 1,
+              yAxisID: 'y'
+            });
+          }
+
+          if (compareMode && selectedUserForWorkouts !== currentUser.uid) {
+            // No need to fetch current user's workouts again, it's already in currentUserWorkouts state
+            const { labels: currentUserLabels, setsData: currentUserSets, repsData: currentUserReps, weightData: currentUserWeight } = processChartData(currentUserWorkouts, selectedExercise);
 
               if (currentUserSets.length > 0) {
                 datasets.push({
@@ -481,23 +581,23 @@
                   }
                 }
               });
-            });
-          } else {
-            chartInstanceRef.current = new Chart(chartRef.current, {
-              type: 'bar',
-              data: {
-                labels,
-                datasets
-              },
-              options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                  y: { beginAtZero: true, title: { display: true, text: 'Value' } },
-                  x: { title: { display: true, text: 'Week Start Date' } }
+            } else {
+              chartInstanceRef.current = new Chart(chartRef.current, {
+                type: 'bar',
+                data: {
+                  labels,
+                  datasets
+                },
+                options: {
+                  responsive: true,
+                  maintainAspectRatio: false,
+                  scales: {
+                    y: { beginAtZero: true, title: { display: true, text: 'Value' } },
+                    x: { title: { display: true, text: 'Week Start Date' } }
+                  }
                 }
-              }
-            });
+              });
+            }
           }
         }
         return () => {
@@ -506,7 +606,7 @@
             chartInstanceRef.current = null;
           }
         };
-      }, [currentTab, workouts, selectedUserForWorkouts, selectedExercise, compareMode]);
+      }, [currentTab, workouts, selectedUserForWorkouts, selectedExercise, compareMode, currentUserWorkouts]); // Added currentUserWorkouts to dependency array
 
       const handleLogout = async () => {
         try {
@@ -757,29 +857,14 @@
                   </div>
                   <h2 className="text-xl font-semibold mb-4">Workouts for {selectedDate}</h2>
                   {workoutError && <p className="text-red-500 mb-4">{workoutError}</p>}
-                  <div className="mb-4">
-                    <label htmlFor="user-select" className="block text-sm font-medium text-gray-700 mb-1">View Workouts For:</label>
-                    <select
-                      id="user-select"
-                      value={selectedUserForWorkouts}
-                      onChange={(e) => setSelectedUserForWorkouts(e.target.value)}
-                      className="w-full p-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    >
-                      <option value={currentUser.uid}>Me ({currentUser.username})</option>
-                      {friends.filter(f => f.visible).map(friend => (
-                        <option key={friend.uid} value={friend.uid}>
-                          {friend.firstName} {friend.lastName} ({friend.name})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* Removed the user selection dropdown from here as per new requirements */}
                   <div className="overflow-x-auto">
                     <table className="w-full bg-white rounded-lg shadow table-fixed">
                       <thead>
                         <tr className="bg-gray-200">
                           <th className="w-48 p-2 text-left">Exercises</th>
                           <th className="flex-1 p-2 text-center">
-                            {selectedUserForWorkouts === currentUser.uid ? currentUser.username : friends.find(f => f.uid === selectedUserForWorkouts)?.name}
+                            {currentUser.username}
                             <div className="flex justify-center space-x-2 mt-1 text-sm text-gray-600">
                               <span className="w-1/3 text-center">Sets</span>
                               <span className="w-1/3 text-center">Reps</span>
@@ -789,28 +874,26 @@
                         </tr>
                       </thead>
                       <tbody>
-                        {getWorkoutsForDate(selectedDate, workouts).map(workout => (
+                        {getWorkoutsForDate(selectedDate, currentUserWorkouts).map(workout => (
                           <tr key={workout.id}>
                             <td className="w-48 p-2 border-t">
                               <div className="flex justify-between items-center">
                                 <span className="flex-grow">{workout.type}</span>
-                                {selectedUserForWorkouts === currentUser.uid && (
-                                  <div className="flex-shrink-0 flex space-x-2">
-                                    <button onClick={() => { setEditWorkout(workout); setNewWorkoutType(workout.type); setShowAddPopup(true); }} className="p-1 text-yellow-500 hover:text-yellow-600">
-                                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z"></path></svg>
-                                    </button>
-                                    <button onClick={() => setShowDeleteWorkoutPopup(workout.id)} className="p-1 text-red-500 hover:text-red-600">
-                                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
-                                    </button>
-                                  </div>
-                                )}
+                                <div className="flex-shrink-0 flex space-x-2">
+                                  <button onClick={() => { setEditWorkout(workout); setNewWorkoutType(workout.type); setShowAddPopup(true); }} className="p-1 text-yellow-500 hover:text-yellow-600">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z"></path></svg>
+                                  </button>
+                                  <button onClick={() => setShowDeleteWorkoutPopup(workout.id)} className="p-1 text-red-500 hover:text-red-600">
+                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                  </button>
+                                </div>
                               </div>
                             </td>
                             <td className="flex-1 p-2 border-t text-center">
                               <div className="flex justify-center space-x-2">
-                                <input type="number" placeholder="Sets" value={workout.sets} onFocus={(e) => { if (e.target.value === '0') e.target.value = ''; }} onBlur={(e) => { if (e.target.value === '') e.target.value = '0'; }} onChange={(e) => updateWorkoutMetrics(workout.id, { sets: e.target.value })} className="w-1/3 p-1 border rounded text-center" disabled={selectedUserForWorkouts !== currentUser.uid} />
-                                <input type="number" placeholder="Reps" value={workout.reps} onFocus={(e) => { if (e.target.value === '0') e.target.value = ''; }} onBlur={(e) => { if (e.target.value === '') e.target.value = '0'; }} onChange={(e) => updateWorkoutMetrics(workout.id, { reps: e.target.value })} className="w-1/3 p-1 border rounded text-center" disabled={selectedUserForWorkouts !== currentUser.uid} />
-                                <input type="number" placeholder="Weight" value={workout.weight} onFocus={(e) => { if (e.target.value === '0') e.target.value = ''; }} onBlur={(e) => { if (e.target.value === '') e.target.value = '0'; }} onChange={(e) => updateWorkoutMetrics(workout.id, { weight: e.target.value })} className="w-1/3 p-1 border rounded text-center" disabled={selectedUserForWorkouts !== currentUser.uid} />
+                                <input type="number" placeholder="Sets" value={workout.sets} onFocus={(e) => { if (e.target.value === '0') e.target.value = ''; }} onBlur={(e) => { if (e.target.value === '') e.target.value = '0'; }} onChange={(e) => updateWorkoutMetrics(workout.id, { sets: e.target.value })} className="w-1/3 p-1 border rounded text-center" />
+                                <input type="number" placeholder="Reps" value={workout.reps} onFocus={(e) => { if (e.target.value === '0') e.target.value = ''; }} onBlur={(e) => { if (e.target.value === '') e.target.value = '0'; }} onChange={(e) => updateWorkoutMetrics(workout.id, { reps: e.target.value })} className="w-1/3 p-1 border rounded text-center" />
+                                <input type="number" placeholder="Weight" value={workout.weight} onFocus={(e) => { if (e.target.value === '0') e.target.value = ''; }} onBlur={(e) => { if (e.target.value === '') e.target.value = '0'; }} onChange={(e) => updateWorkoutMetrics(workout.id, { weight: e.target.value })} className="w-1/3 p-1 border rounded text-center" />
                               </div>
                             </td>
                           </tr>
@@ -915,7 +998,7 @@
           )}
 
           {currentTab === 'charts' && (
-            <div className="p-4 bg-white rounded-lg shadow relative" style={{ height: '400px' }}>
+            <div className="p-4 bg-white rounded-lg shadow">
               <h2 className="text-xl font-semibold mb-4">Workout Progress Charts</h2>
               <div className="mb-4">
                 <label htmlFor="chart-user-select" className="block text-sm font-medium text-gray-700 mb-1">View Charts For:</label>
@@ -955,7 +1038,9 @@
                 </button>
               </div>
 
-              {workouts.length > 0 ? <canvas ref={chartRef} className="absolute inset-0 w-full h-full"></canvas> : <p className="text-gray-500">No workouts to display yet.</p>}
+              <div style={{ position: 'relative', height: '400px', width: '100%', marginBottom: '20px' }}>
+                {workouts.length > 0 ? <canvas ref={chartRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}></canvas> : <p className="text-gray-500">No workouts to display yet.</p>}
+              </div>
             </div>
           )}
 
@@ -1092,7 +1177,7 @@
                                 />
                                 <div className="flex justify-end space-x-2 mt-4">
                                   <button onClick={() => { /* Implement save logic here */ }} className="p-2 bg-green-500 text-white rounded hover:bg-green-600">Save</button>
-                                  <button onClick={() => setIsEditingExercise(false)} className="p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Cancel</button>
+                                  <button onClick={() => { setIsEditingExercise(false); setSelectedExercise(null); }} className="p-2 bg-gray-300 text-black rounded hover:bg-gray-400">Cancel</button>
                                 </div>
                               </>
                             ) : (
